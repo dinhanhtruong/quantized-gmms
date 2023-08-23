@@ -40,8 +40,10 @@ CPU = torch.device('cpu')
 
 
 def get_device(device_id: int) -> D:
-    if not torch.cuda.is_available():
-        return CPU
+    # if not torch.cuda.is_available():
+    #     print("USING CPU")
+    #     return CPU
+    print(f'using cuda:{device_id}')
     device_id = min(torch.cuda.device_count() - 1, device_id)
     return torch.device(f'cuda:{device_id}')
 

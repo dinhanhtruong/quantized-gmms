@@ -26,14 +26,15 @@ class Inference:
         return mesh
 
     def plot_occ(self, z: Union[T, TS], z_base, gmms: Optional[TS], fixed_items: T,
-                 folder_name: str, res=200, verbose=False):
+                 folder_name: str, res=200, verbose=True):
         for i in range(len(z)):
-            mesh = self.get_mesh(z[i], res)
+            mesh = self.get_mesh(z[i], res)  # mcubes
             name = f'{fixed_items[i]:04d}'
             if mesh is not None:
-                files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{name}')
+                files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{name}') # obj
                 files_utils.save_pickle(z_base[i].detach().cpu(), f'{self.opt.cp_folder}/{folder_name}/occ/{name}')
                 if gmms is not None:
+                    # TODO: extract feats for quantization
                     files_utils.export_gmm(gmms, i, f'{self.opt.cp_folder}/{folder_name}/occ/{name}')
             if verbose:
                 print(f'done {i + 1:d}/{len(z):d}')
@@ -164,11 +165,20 @@ class Inference:
         return ids + max(max(names) + 1, self.opt.dataset_size)
 
     @models_utils.torch_no_grad
+    ##########################################
     def random_plot(self, folder_name: str, nums_sample, res=200, verbose=False):
-        zh_base, gmms = self.model.random_samples(nums_sample)
-        zh, attn_b = self.model.merge_zh(zh_base, gmms)
+        '''
+        Saves randomly sampled mesh (and GMMs)
+        '''
+        print("rand shape")
+        zh_base, gmms = self.model.random_samples(nums_sample) # get surface vecs s_j and GMM params
+        centroids, factorized_cov, mixing_weights, eigenvals = gmms
+        
+
+        zh, attn_b = self.model.merge_zh(zh_base, gmms)  # z_c after applying mixing net 
         numbers = self.get_new_ids(folder_name, nums_sample)
         self.plot_occ(zh, zh_base, gmms, numbers, folder_name, verbose=verbose, res=res)
+    ###########################################
 
     @models_utils.torch_no_grad
     def plot(self, folder_name: str, nums_sample: int, verbose=False, res: int = 200):

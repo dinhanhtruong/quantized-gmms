@@ -236,16 +236,17 @@ def main():
                   '--source':  {'default': 'inversion', 'type': str, 'options': ('inversion', 'random', 'training')},
                   '--num_samples':  {'default': 10, 'type': int, 'help': 'relevant for random or training'}}
     args = myparse.parse(for_parser)
-    opt = options.Options(tag=args['model_name'])
+    opt = options.Options(tag=args['model_name']) 
 
     if args['source'] == 'inversion':
         model = MeshProjectionMid(opt, args['mesh_path'], args['output_name'])
         model.invert(150)
     else:
-        model = occ_inference.Inference(opt)
+        model = occ_inference.Inference(opt) # occ_gmm.Spaghetti model initialized in constructor 
         if args['source'] == 'random':
             model.random_plot(args['output_name'], args['num_samples'])
         else:
+            # from training samples
             model.plot(args['output_name'], args['num_samples'])
     return 0
 

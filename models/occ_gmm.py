@@ -1,3 +1,4 @@
+import random
 from options import Options
 from models import models_utils, transformer
 import constants
@@ -16,6 +17,10 @@ def remove_projection(v_1, v_2):
 
 
 def get_p_direct(splitted: TS) -> T:
+    '''
+    p sure this forms an orthonormal basis (via Gram-schmidt?) in a 3x3 from the raw linear output
+        i.e. factorized covariance matrix (unitary)
+    '''
     raw_base = []
     for i in range(constants.DIM):
         u = splitted[i]
@@ -28,11 +33,29 @@ def get_p_direct(splitted: TS) -> T:
 
 
 def split_gm(splitted: TS) -> TS:
-    p = get_p_direct(splitted)
-    # eigenvalues
-    eigen = splitted[-3] ** 2 + constants.EPSILON
-    mu = splitted[-2]
-    phi = splitted[-1].squeeze(3)
+    '''
+    args:
+        - splitted: list of tensors with shapes 5x[B,1,m,3], [B,1,m,1]
+                where first three tensors form cov matrix, then eigenvalues, centroids, and mixing weights
+    returns:
+        - mu=centroids  [B,1,m,3]
+        - p=factorized cov matrices [B, 1, m, 3,3]
+        - phi=mixing weights [B,1,m]
+        - eigenvals  [B,1,m,3]
+    '''
+    # TODO: quantize pre-orthogonalized cov (concat first 3 tensors in splitted to get [B,1,m,9])
+
+    p = get_p_direct(splitted) # 3x3 factorized covariance matrix [B, 1, m, 3,3]
+    eigen = splitted[-3] ** 2 + constants.EPSILON # eigenvalues of diag matrix (lambda in paper). [B,1,m,3]
+    mu = splitted[-2]  # 3D centroid [B,1,m,3]
+    phi = splitted[-1].squeeze(3)  # mixing constants/scale factor. [B,1,m]
+    print('p:', p.shape)
+    print('eig:', eigen.shape)
+    print('mu:', mu.shape)
+    print('phi:', phi.shape)
+    all_centroids = mu.view(-1, 3) # [total_parts, 3]
+    all_eigenvals = eigen.view(-1, 3) # [total_parts, 3]
+    
     return mu, p, phi, eigen
 
 
@@ -45,8 +68,8 @@ class DecompositionNetwork(nn.Module):
         return self.to_zb(x)
 
     def forward(self, x):
-        x = self.forward_bottom(x)
-        x = self.forward_upper(x)
+        x = self.forward_bottom(x) # split into m vecs
+        x = self.forward_upper(x) # shared MLP across m parts
         return x
 
     def __init__(self, opt: Options, act=nnf.relu, norm_layer: nn.Module = nn.LayerNorm):
@@ -134,15 +157,32 @@ class DecompositionControl(models_utils.Model):
         return x
 
     def forward_split(self, x: T) -> Tuple[T, TS]:
+        '''
+        AT
+
+        high dim per-part vector z_b to {surface detail vec, 16D GMM params}
+        x: [B, m, dim_h]
+
+        returns
+            -surface detail vec s_j=zh_base: [B, m, d_surface]
+            -gmms: centroids, factorized_cov, mixing_weights, eigenvals
+        '''
         b = x.shape[0]
-        raw_gmm = self.to_gmm(x).unsqueeze(1)
+        # NOTE: with reflection symmetry on, only the first half of m gaussians matter, since they get reflected and concat'ed. 
+            # the remaining half are discarded (although their surface vecs remain)
+        raw_gmm = self.to_gmm(x).unsqueeze(1)  #linear. [B, 1, m, 16] 
+        print("raw gmm: ", raw_gmm.shape)
         gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3))
-        zh = self.to_s(x)
-        zh = zh.view(b, -1, zh.shape[-1])
+        zh = self.to_s(x) #linear
+        zh = zh.view(b, -1, zh.shape[-1]) #[B, m, d_surface]
+        print("zh: ", zh[:,:,:5])
         return zh, gmms
 
     @staticmethod
     def apply_gmm_affine(gmms: TS, affine: T):
+        '''
+        transform centroid pos and factorized cov matrix
+        '''
         mu, p, phi, eigen = gmms
         if affine.dim() == 2:
             affine = affine.unsqueeze(0).expand(mu.shape[0], *affine.shape)
@@ -152,15 +192,26 @@ class DecompositionControl(models_utils.Model):
 
     @staticmethod
     def concat_gmm(gmm_a: TS, gmm_b: TS):
+        '''
+        Concats half the gaussians from each of the arguments
+        '''
         out = []
         num_gaussians = gmm_a[0].shape[2] // 2
+        # gaussian_perm = torch.randperm(16)[:8]
         for element_a, element_b in zip(gmm_a, gmm_b):
+            # for each parameter type, get the ones for the first num_gaussians from each arg
             out.append(torch.cat((element_a[:, :, :num_gaussians], element_b[:, :, :num_gaussians]), dim=2))
+            # out.append(torch.cat((element_a[:, :, gaussian_perm], element_b[:, :, gaussian_perm]), dim=2))
         return out
 
     def forward_mid(self, zs) -> Tuple[T, TS]:
-        zh, gmms = self.forward_split(zs)
+        '''
+        Args
+            - Z_b: [B, m, dim_h]
+        '''
+        zh, gmms = self.forward_split(zs)  # split z_b into surface vec + gaussian params
         if self.reflect is not None:
+            print("REFLECTING")
             gmms_r = self.apply_gmm_affine(gmms, self.reflect)
             gmms = self.concat_gmm(gmms, gmms_r)
         return zh, gmms
@@ -170,12 +221,17 @@ class DecompositionControl(models_utils.Model):
         return zs
 
     def forward(self, z_init) -> Tuple[T, TS]:
-        zs = self.forward_low(z_init)
-        zh, gmms = self.forward_mid(zs)
+        zs = self.forward_low(z_init) # split z_a into m part vectors (Z_b): [B, m, dim_h]
+        # AT: quantize z_b before splitting into surface/GMM vecs
+   ####     # TODO save zs as .npy [B*m, dim_h]
+        zh, gmms = self.forward_mid(zs) # apply separate linear layers to get s_j and g_j
         return zh, gmms
 
     @staticmethod
     def get_reflection(reflect_axes: Tuple[bool, ...]):
+        '''
+        AT: returns 3x3 diag matrix where M_ii = -1 if reflect is true on that axis
+        '''
         reflect = torch.eye(constants.DIM)
         for i in range(constants.DIM):
             if reflect_axes[i]:
@@ -189,7 +245,7 @@ class DecompositionControl(models_utils.Model):
             self.register_buffer("reflect", reflect)
         else:
             self.reflect = None
-        self.split_shape = tuple((constants.DIM + 2) * [constants.DIM] + [1])
+        self.split_shape = tuple((constants.DIM + 2) * [constants.DIM] + [1]) # [3,3,3,3,3,1] sums to 16
         self.decomposition = DecompositionNetwork(opt)
         self.to_gmm = nn.Linear(opt.dim_h, sum(self.split_shape))
         self.to_s = nn.Linear(opt.dim_h, opt.dim_h)
@@ -238,13 +294,13 @@ class Spaghetti(models_utils.Model):
         mu, p, phi, eigen = [item.view(b, gp * g, *item.shape[3:]) for item in gmms]
         p = p.reshape(*p.shape[:2], -1)
         z_gmm = torch.cat((mu, p, phi.unsqueeze(-1), eigen), dim=2).detach()
-        z_gmm = self.from_gmm(z_gmm)
-        zh_ = zh + z_gmm
+        z_gmm = self.from_gmm(z_gmm)  # apply identity transformation to g_j to get g^_j (i.e. no transformation in eq 7)
+        zh_ = zh + z_gmm # see eq 7
         return zh_
 
     def merge_zh(self, zh, gmms, mask: Optional[T] = None) -> TNS:
-        zh_ = self.merge_zh_step_a(zh, gmms)
-        zh_, attn = self.mixing_network.forward_with_attention(zh_, mask=mask)
+        zh_ = self.merge_zh_step_a(zh, gmms) # z^_b part-level control (eq 7)
+        zh_, attn = self.mixing_network.forward_with_attention(zh_, mask=mask)  # z_c
         return zh_, attn
 
     def forward_b(self, x, zh, gmms, mask: Optional[T] = None) -> T:
@@ -269,6 +325,9 @@ class Spaghetti(models_utils.Model):
         return self.forward_b(x, zh, gmms), gmms
 
     def get_random_embeddings(self, num_items: int):
+        '''
+        AT: returns randomly sampled vec z_a
+        '''
         if self.dist is None:
             weights = self.z.weight.clone().detach()
             mean = weights.mean(0)
@@ -279,8 +338,8 @@ class Spaghetti(models_utils.Model):
         return z_init
 
     def random_samples(self, num_items: int):
-        z_init = self.get_random_embeddings(num_items)
-        zh, gmms = self.decomposition_control(z_init)
+        z_init = self.get_random_embeddings(num_items) # random z_a, one per sample. [B, dim_z]
+        zh, gmms = self.decomposition_control(z_init)  # [B, m, dim_h]
         return zh, gmms
 
     def __init__(self, opt: Options):
@@ -288,6 +347,7 @@ class Spaghetti(models_utils.Model):
         self.device = opt.device
         self.opt = opt
         self.z = nn.Embedding(opt.dataset_size, opt.dim_z)
+        print("dataset sz: ", opt.dataset_size)
         torch.nn.init.normal_(
             self.z.weight.data,
             0.0,

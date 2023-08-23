@@ -69,7 +69,7 @@ def model_lc(opt: options.Options, override_model: Optional[str] = None) -> Tupl
     already_init = False
     params_path = f'{opt.cp_folder}/options.pkl'
     opt_ = files_utils.load_pickle(params_path)
-
+    print("Symmetry option: ", opt_.symmetric)
     if opt_ is not None:
         opt_.device = opt.device
         opt = opt_
