@@ -1,3 +1,4 @@
+import os
 import random
 from options import Options
 from models import models_utils, transformer
@@ -171,11 +172,9 @@ class DecompositionControl(models_utils.Model):
         # NOTE: with reflection symmetry on, only the first half of m gaussians matter, since they get reflected and concat'ed. 
             # the remaining half are discarded (although their surface vecs remain)
         raw_gmm = self.to_gmm(x).unsqueeze(1)  #linear. [B, 1, m, 16] 
-        print("raw gmm: ", raw_gmm.shape)
         gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3))
         zh = self.to_s(x) #linear
         zh = zh.view(b, -1, zh.shape[-1]) #[B, m, d_surface]
-        print("zh: ", zh[:,:,:5])
         return zh, gmms
 
     @staticmethod
@@ -220,10 +219,20 @@ class DecompositionControl(models_utils.Model):
         zs = self.decomposition(z_init)
         return zs
 
-    def forward(self, z_init) -> Tuple[T, TS]:
+    def forward(self, z_init, output_dir='') -> Tuple[T, TS]:
         zs = self.forward_low(z_init) # split z_a into m part vectors (Z_b): [B, m, dim_h]
-        # AT: quantize z_b before splitting into surface/GMM vecs
-   ####     # TODO save zs as .npy [B*m, dim_h]
+        # AT: save continuous z_b for quantization before splitting into surface/GMM vecs
+        save_path = f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/'
+        assert output_dir
+        if not os.path.exists(f'{save_path}/all_zb_base.npy'):
+            os.makedirs(save_path)
+            print("saving new codes")
+            np.save(f'{save_path}/all_zb_base.npy', zs.detach().cpu().numpy())
+        else:
+            # load zs
+            print('loading existing codes')
+            zs = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_zb.npy')
+            zs = torch.tensor(zs).cuda()
         zh, gmms = self.forward_mid(zs) # apply separate linear layers to get s_j and g_j
         return zh, gmms
 
@@ -284,9 +293,12 @@ class Spaghetti(models_utils.Model):
         zh, gmms = self.decomposition_control.forward_split(self.decomposition_control.forward_upper(z_b))
         return z_a, z_b, zh, gmms
 
-    def get_embeddings(self, item: T):
+    def get_embeddings(self, item: T, output_dir=''):
+        '''
+        use train embeddings
+        '''
         z = self.get_z(item)
-        zh, gmms = self.decomposition_control(z)
+        zh, gmms = self.decomposition_control(z, output_dir)
         return zh, z, gmms
 
     def merge_zh_step_a(self, zh, gmms):

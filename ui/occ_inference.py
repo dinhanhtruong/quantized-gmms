@@ -1,3 +1,4 @@
+import os
 from custom_types import *
 from options import Options
 from utils import train_utils, mcubes_meshing, files_utils, mesh_utils
@@ -26,16 +27,18 @@ class Inference:
         return mesh
 
     def plot_occ(self, z: Union[T, TS], z_base, gmms: Optional[TS], fixed_items: T,
-                 folder_name: str, res=200, verbose=True):
-        for i in range(len(z)):
+                 folder_name: str, res=200, verbose=True, from_quantized=False):
+        for i in range(fixed_items.shape[0]):
             mesh = self.get_mesh(z[i], res)  # mcubes
             name = f'{fixed_items[i]:04d}'
+            if from_quantized:
+                name += '_quantized'
             if mesh is not None:
                 files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{name}') # obj
-                files_utils.save_pickle(z_base[i].detach().cpu(), f'{self.opt.cp_folder}/{folder_name}/occ/{name}')
+                # files_utils.save_pickle(z_base[i].detach().cpu(), f'{self.opt.cp_folder}/{folder_name}/occ/{name}')
                 if gmms is not None:
-                    # TODO: extract feats for quantization
-                    files_utils.export_gmm(gmms, i, f'{self.opt.cp_folder}/{folder_name}/occ/{name}')
+                    pass
+                    files_utils.export_gmm(gmms, i, f'{self.opt.cp_folder}/{folder_name}/gmms/{name}')
             if verbose:
                 print(f'done {i + 1:d}/{len(z):d}')
 
@@ -173,22 +176,41 @@ class Inference:
         print("rand shape")
         zh_base, gmms = self.model.random_samples(nums_sample) # get surface vecs s_j and GMM params
         centroids, factorized_cov, mixing_weights, eigenvals = gmms
-        
 
         zh, attn_b = self.model.merge_zh(zh_base, gmms)  # z_c after applying mixing net 
         numbers = self.get_new_ids(folder_name, nums_sample)
+
+        
+
+
         self.plot_occ(zh, zh_base, gmms, numbers, folder_name, verbose=verbose, res=res)
     ###########################################
 
     @models_utils.torch_no_grad
     def plot(self, folder_name: str, nums_sample: int, verbose=False, res: int = 200):
+        '''
+        Saves reconstructions of training meshes
+        '''
         if self.model.opt.dataset_size < nums_sample:
-            fixed_items = torch.arange(self.model.opt.dataset_size)
+            print("using ALL train data")
+            shape_samples = torch.arange(self.model.opt.dataset_size)
         else:
-            fixed_items = torch.randint(low=0, high=self.opt.dataset_size, size=(nums_sample,))
-        zh_base, _, gmms = self.model.get_embeddings(fixed_items.to(self.device))
+            print('using rand train subset')
+            shape_samples = torch.randint(low=0, high=self.opt.dataset_size, size=(nums_sample,))
+        zh_base, _, gmms = self.model.get_embeddings(shape_samples.to(self.device), folder_name)
         zh, attn_b = self.model.merge_zh(zh_base, gmms)
-        self.plot_occ(zh, zh_base, gmms, fixed_items, folder_name, verbose=verbose, res=res)
+
+        # save mesh names
+        from_quantized = False
+        if not os.path.exists(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy'):
+            np.save(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy', shape_samples.detach().cpu().numpy())
+        else:
+            print('using existing mesh names')
+            from_quantized = True
+            shape_samples = np.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy')
+        # only reconstruct meshes for first n samples
+        shape_samples = shape_samples[:nums_sample]
+        self.plot_occ(zh, zh_base, gmms, shape_samples, folder_name, verbose=verbose, res=res, from_quantized=from_quantized)
 
     def get_mesh_from_mid(self, gmm, included: T, res: int) -> Optional[T_Mesh]:
         if self.mid is None:

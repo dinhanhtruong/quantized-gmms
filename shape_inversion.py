@@ -247,7 +247,7 @@ def main():
             model.random_plot(args['output_name'], args['num_samples'])
         else:
             # from training samples
-            model.plot(args['output_name'], args['num_samples'])
+            model.plot(args['output_name'], args['num_samples'], res=200)
     return 0
 
 
