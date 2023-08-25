@@ -157,7 +157,7 @@ class DecompositionControl(models_utils.Model):
         x = self.decomposition.forward_upper(x)
         return x
 
-    def forward_split(self, x: T) -> Tuple[T, TS]:
+    def forward_split(self, x: T, output_dir='') -> Tuple[T, TS]:
         '''
         AT
 
@@ -172,9 +172,26 @@ class DecompositionControl(models_utils.Model):
         # NOTE: with reflection symmetry on, only the first half of m gaussians matter, since they get reflected and concat'ed. 
             # the remaining half are discarded (although their surface vecs remain)
         raw_gmm = self.to_gmm(x).unsqueeze(1)  #linear. [B, 1, m, 16] 
-        gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3))
         zh = self.to_s(x) #linear
         zh = zh.view(b, -1, zh.shape[-1]) #[B, m, d_surface]
+
+        # AT: 2nd quantization scheme (raw GMM + s_j)
+        assert output_dir
+        save_path = f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/'
+        if not os.path.exists(f'{save_path}/raw_gmms.npy'):
+            print("saving new codes")
+            os.makedirs(save_path)
+            np.save(f'{save_path}/raw_gmms.npy', raw_gmm.detach().cpu().numpy()) #[B, 1, m, 16] 
+            np.save(f'{save_path}/surface_feats.npy', zh.detach().cpu().numpy()) #[B, m, d_surface]
+        else:
+            # load from disk
+            print('loading existing codes')
+            raw_gmm = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_raw_gmms.npy')
+            raw_gmm = torch.tensor(raw_gmm).cuda()
+            zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
+            zh = torch.tensor(zh).cuda()
+
+        gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3))
         return zh, gmms
 
     @staticmethod
@@ -203,12 +220,12 @@ class DecompositionControl(models_utils.Model):
             # out.append(torch.cat((element_a[:, :, gaussian_perm], element_b[:, :, gaussian_perm]), dim=2))
         return out
 
-    def forward_mid(self, zs) -> Tuple[T, TS]:
+    def forward_mid(self, zs, output_dir='') -> Tuple[T, TS]:
         '''
         Args
             - Z_b: [B, m, dim_h]
         '''
-        zh, gmms = self.forward_split(zs)  # split z_b into surface vec + gaussian params
+        zh, gmms = self.forward_split(zs, output_dir)  # split z_b into surface vec + gaussian params
         if self.reflect is not None:
             print("REFLECTING")
             gmms_r = self.apply_gmm_affine(gmms, self.reflect)
@@ -221,19 +238,25 @@ class DecompositionControl(models_utils.Model):
 
     def forward(self, z_init, output_dir='') -> Tuple[T, TS]:
         zs = self.forward_low(z_init) # split z_a into m part vectors (Z_b): [B, m, dim_h]
+        # AT: 1st quantization scheme 
         # AT: save continuous z_b for quantization before splitting into surface/GMM vecs
-        save_path = f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/'
-        assert output_dir
-        if not os.path.exists(f'{save_path}/all_zb_base.npy'):
-            os.makedirs(save_path)
-            print("saving new codes")
-            np.save(f'{save_path}/all_zb_base.npy', zs.detach().cpu().numpy())
-        else:
-            # load zs
-            print('loading existing codes')
-            zs = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_zb.npy')
-            zs = torch.tensor(zs).cuda()
-        zh, gmms = self.forward_mid(zs) # apply separate linear layers to get s_j and g_j
+        # save_path = f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/'
+        # assert output_dir
+        # if not os.path.exists(f'{save_path}/all_zb_base.npy'):
+        #     os.makedirs(save_path)
+        #     print("saving new codes")
+        #     np.save(f'{save_path}/all_zb_base.npy', zs.detach().cpu().numpy())
+        # else:
+        #     # load zs
+        #     print('loading existing codes')
+        #     zs = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_zb.npy')
+        #     zs = torch.tensor(zs).cuda()
+
+        # test position equivariance w/ symmetry
+        # perm = torch.randperm(8)
+        # zs[:, :8] = zs[:, perm]
+        # zs[:, 8:] = zs[:, 8+perm]
+        zh, gmms = self.forward_mid(zs, output_dir) # apply separate linear layers to get s_j and g_j
         return zh, gmms
 
     @staticmethod
