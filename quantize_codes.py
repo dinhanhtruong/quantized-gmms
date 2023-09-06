@@ -40,7 +40,7 @@ def quantize_surface_and_raw_gmm(surface_feat_vocab_sz, gmm_vocab_sz, sample_dir
 
     # form 2 codebooks
     # 1) surface feats
-    kmeans = MiniBatchKMeans(n_clusters=surface_feat_vocab_sz, max_iter=400, tol=1e-5, random_state=1, batch_size=8192, n_init=10).fit(surface_feats)
+    kmeans = MiniBatchKMeans(n_clusters=surface_feat_vocab_sz, max_iter=400, tol=1e-5, random_state=1, batch_size=12000, n_init=10).fit(surface_feats)
     surface_feat_codebook = kmeans.cluster_centers_ # [vocab, feat]
     surface_feat_code_indices = kmeans.predict(surface_feats)
     surface_feat_quantized_codes = surface_feat_codebook[surface_feat_code_indices].reshape(surface_feats_shape)
@@ -49,7 +49,7 @@ def quantize_surface_and_raw_gmm(surface_feat_vocab_sz, gmm_vocab_sz, sample_dir
     print(surface_feat_code_indices.reshape((surface_feats_shape[:-1])))
     print("surf quantized: ", surface_feat_quantized_codes.shape)
 
-    kmeans = MiniBatchKMeans(n_clusters=gmm_vocab_sz, max_iter=400, tol=1e-5, random_state=1, batch_size=8192, n_init=10).fit(raw_gmms)
+    kmeans = MiniBatchKMeans(n_clusters=gmm_vocab_sz, max_iter=400, tol=1e-5, random_state=1, batch_size=12000, n_init=10).fit(raw_gmms)
     gmm_codebook = kmeans.cluster_centers_ # [vocab, feat]
     gmm_code_indices = kmeans.predict(raw_gmms)
     gmm_quantized_codes = gmm_codebook[gmm_code_indices].reshape(gmms_shape)
@@ -72,6 +72,6 @@ def quantize_surface_and_raw_gmm(surface_feat_vocab_sz, gmm_vocab_sz, sample_dir
 #3) Quantize s_j and raw per-GMM parameters (covariance, eigenvalues, center, mixing weight) 
 
 
-vocab_sz = 512 #1024
-sample_dir_name = 'raw_gmm_surface_feat_quantize'
+vocab_sz = 1024
+sample_dir_name = 'raw_gmm_surface_feat_quantize_1024'
 quantize_surface_and_raw_gmm(surface_feat_vocab_sz=vocab_sz, gmm_vocab_sz=vocab_sz, sample_dir_name=sample_dir_name)
