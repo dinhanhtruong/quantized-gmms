@@ -4,7 +4,7 @@ import os
 from tqdm import tqdm
 
 # contains continuous and quantized output mesh OBJs
-exp_name = 'raw_gmm_surface_feat_quantize_1024'
+exp_name = 'split_gmm_surface_feat_quantize_256'
 mesh_dir = f'assets/checkpoints/spaghetti_airplanes/{exp_name}/occ' # relative to root
 
 # get predicted and 'gt' mesh filepaths

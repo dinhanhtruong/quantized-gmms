@@ -210,7 +210,7 @@ class Inference:
             shape_samples = np.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy')
         # only reconstruct meshes for first n samples
         shape_samples = shape_samples[:nums_sample]
-        self.plot_occ(zh, zh_base, gmms, shape_samples, folder_name, verbose=verbose, res=res, from_quantized=from_quantized)
+        self.plot_occ(zh, zh_base, gmms, shape_samples, folder_name, verbose=True, res=res, from_quantized=from_quantized)
 
     def get_mesh_from_mid(self, gmm, included: T, res: int) -> Optional[T_Mesh]:
         if self.mid is None:

@@ -23,7 +23,7 @@ def get_p_direct(splitted: TS) -> T:
         i.e. factorized covariance matrix (unitary)
     '''
     raw_base = []
-    for i in range(constants.DIM):
+    for i in range(constants.DIM): # 3 dims
         u = splitted[i]
         for j in range(i):
             u = remove_projection(u, raw_base[j])
@@ -33,32 +33,62 @@ def get_p_direct(splitted: TS) -> T:
     return p
 
 
-def split_gm(splitted: TS) -> TS:
+def split_gm(splitted: TS, output_dir='') -> TS:
     '''
     args:
         - splitted: list of tensors with shapes 5x[B,1,m,3], [B,1,m,1]
                 where first three tensors form cov matrix, then eigenvalues, centroids, and mixing weights
+    
     returns:
         - mu=centroids  [B,1,m,3]
         - p=factorized cov matrices [B, 1, m, 3,3]
         - phi=mixing weights [B,1,m]
         - eigenvals  [B,1,m,3]
     '''
-    # TODO: quantize pre-orthogonalized cov (concat first 3 tensors in splitted to get [B,1,m,9])
+    # quantize pre-orthogonalized cov (concat first 3 tensors in splitted to get [B,1,m,9])
+    pre_orthog_cov = torch.cat(splitted[:3], dim=-1) # [B,1,m,9]
 
-    p = get_p_direct(splitted) # 3x3 factorized covariance matrix [B, 1, m, 3,3]
     eigen = splitted[-3] ** 2 + constants.EPSILON # eigenvalues of diag matrix (lambda in paper). [B,1,m,3]
     mu = splitted[-2]  # 3D centroid [B,1,m,3]
     phi = splitted[-1].squeeze(3)  # mixing constants/scale factor. [B,1,m]
+    # all_centroids = mu.view(-1, 3) # [total_parts, 3]
+    # all_eigenvals = eigen.view(-1, 3) # [total_parts, 3]
+
+    # AT: 3rd quantization scheme, pt 2 (per-GMM param + s_j)
+    assert output_dir
+    save_path = f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/'
+    if not os.path.exists(f'{save_path}/pre_orthog_covariances.npy'):
+        print("saving new per-param codes")
+        np.save(f'{save_path}/pre_orthog_covariances.npy', pre_orthog_cov.detach().cpu().numpy()) #[B,1,m,9]
+        np.save(f'{save_path}/eigenvalues.npy', eigen.detach().cpu().numpy()) # squared eigenvals, 3 per part [B,1,m,3] 
+        np.save(f'{save_path}/centers.npy', mu.detach().cpu().numpy()) # [B,1,m,3]
+        np.save(f'{save_path}/mixing_weights.npy', phi.detach().cpu().numpy()) # [B,1,m]
+    else:
+        # load from disk
+        print('loading existing per-param codes')
+        pre_orthog_cov = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_pre_orthog_covariances.npy')
+        pre_orthog_cov = torch.tensor(pre_orthog_cov).cuda()
+        eigen = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_eigenvalues.npy')
+        eigen = torch.tensor(eigen).cuda()
+        mu = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_centers.npy')
+        mu = torch.tensor(mu).cuda()
+        phi = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_mixing_weights.npy')
+        phi = torch.tensor(phi).cuda()
+
+        # split quantized pre-orthog cov into column vectors
+        splitted = list(splitted)
+        splitted[0] = pre_orthog_cov[..., :3]
+        splitted[1] = pre_orthog_cov[..., 3:6]
+        splitted[2] = pre_orthog_cov[..., 6:] # remaining elements of splitted aren't used in get_p_direct
+        splitted = tuple(splitted)
+    
+    p = get_p_direct(splitted) # 3x3 factorized covariance matrix [B, 1, m, 3,3]
     print('p:', p.shape)
     print('eig:', eigen.shape)
     print('mu:', mu.shape)
     print('phi:', phi.shape)
-    all_centroids = mu.view(-1, 3) # [total_parts, 3]
-    all_eigenvals = eigen.view(-1, 3) # [total_parts, 3]
-    
-    return mu, p, phi, eigen
 
+    return mu, p, phi, eigen
 
 class DecompositionNetwork(nn.Module):
 
@@ -176,22 +206,35 @@ class DecompositionControl(models_utils.Model):
         zh = zh.view(b, -1, zh.shape[-1]) #[B, m, d_surface]
 
         # AT: 2nd quantization scheme (raw GMM + s_j)
+        # assert output_dir
+        # save_path = f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/'
+        # if not os.path.exists(f'{save_path}/raw_gmms.npy'):
+        #     print("saving new codes")
+        #     os.makedirs(save_path)
+        #     np.save(f'{save_path}/raw_gmms.npy', raw_gmm.detach().cpu().numpy()) #[B, 1, m, 16] 
+        #     np.save(f'{save_path}/surface_feats.npy', zh.detach().cpu().numpy()) #[B, m, d_surface]
+        # else:
+        #     # load from disk
+        #     print('loading existing codes')
+        #     raw_gmm = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_raw_gmms.npy')
+        #     raw_gmm = torch.tensor(raw_gmm).cuda()
+        #     zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
+        #     zh = torch.tensor(zh).cuda()
+
+        # AT: 3rd quantization scheme, part 1 (per-GMM param + s_j)
         assert output_dir
         save_path = f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/'
-        if not os.path.exists(f'{save_path}/raw_gmms.npy'):
+        if not os.path.exists(f'{save_path}/surface_feats.npy'):
             print("saving new codes")
             os.makedirs(save_path)
-            np.save(f'{save_path}/raw_gmms.npy', raw_gmm.detach().cpu().numpy()) #[B, 1, m, 16] 
             np.save(f'{save_path}/surface_feats.npy', zh.detach().cpu().numpy()) #[B, m, d_surface]
         else:
             # load from disk
             print('loading existing codes')
-            raw_gmm = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_raw_gmms.npy')
-            raw_gmm = torch.tensor(raw_gmm).cuda()
             zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
             zh = torch.tensor(zh).cuda()
 
-        gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3))
+        gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3), output_dir=output_dir)
         return zh, gmms
 
     @staticmethod
