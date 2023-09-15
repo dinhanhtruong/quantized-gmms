@@ -1,5 +1,7 @@
 import numpy as np
 from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn import metrics
+import matplotlib.pyplot as plt
 
 #1) Quantize z_b vectors (which are projected to s_j and GMMs)
 def quantize_zb(vocab_sz, sample_dir_name):
@@ -44,19 +46,33 @@ def quantize_surface_and_raw_gmm(surface_feat_vocab_sz, gmm_vocab_sz, sample_dir
     surface_feat_codebook = kmeans.cluster_centers_ # [vocab, feat]
     surface_feat_code_indices = kmeans.predict(surface_feats)
     surface_feat_quantized_codes = surface_feat_codebook[surface_feat_code_indices].reshape(surface_feats_shape)
-    print("surf codebook: ", surface_feat_codebook.shape)
-    print("surf indices:")
-    print(surface_feat_code_indices.reshape((surface_feats_shape[:-1])))
-    print("surf quantized: ", surface_feat_quantized_codes.shape)
+    # print("surf codebook: ", surface_feat_codebook.shape)
+    # print("surf indices:")
+    # print(surface_feat_code_indices.reshape((surface_feats_shape[:-1])))
+    # print("surf quantized: ", surface_feat_quantized_codes.shape)
+
+
+    # TEMP: measure cluster quality
+    surface_clustering_CH = metrics.calinski_harabasz_score(surface_feats, kmeans.labels_)
+    surface_clustering_silhouette = metrics.silhouette_score(surface_feats, kmeans.labels_, metric='euclidean')
+    print("surface CH: ", surface_clustering_CH)
+    print("surface Silhouette: ", surface_clustering_silhouette)
 
     kmeans = MiniBatchKMeans(n_clusters=gmm_vocab_sz, max_iter=400, tol=1e-5, random_state=1, batch_size=12000, n_init=10).fit(raw_gmms)
     gmm_codebook = kmeans.cluster_centers_ # [vocab, feat]
     gmm_code_indices = kmeans.predict(raw_gmms)
     gmm_quantized_codes = gmm_codebook[gmm_code_indices].reshape(gmms_shape)
-    print("gmm codebook: ", gmm_codebook.shape)
-    print("gmm indices:")
-    print(gmm_code_indices.reshape((gmms_shape[:-1])))
-    print("gmm quantized: ", gmm_quantized_codes.shape)
+    # print("gmm codebook: ", gmm_codebook.shape)
+    # print("gmm indices:")
+    # print(gmm_code_indices.reshape((gmms_shape[:-1])))
+    # print("gmm quantized: ", gmm_quantized_codes.shape)
+
+    gmm_clustering_CH = metrics.calinski_harabasz_score(raw_gmms, kmeans.labels_)
+    gmm_clustering_silhouette = metrics.silhouette_score(raw_gmms, kmeans.labels_, metric='euclidean')
+    print("GMM CH: ", gmm_clustering_CH)
+    print("GMM Silhouette: ", gmm_clustering_silhouette)
+    return surface_clustering_CH, surface_clustering_silhouette, gmm_clustering_CH, gmm_clustering_silhouette
+
 
     # save codebook and quantized codes
     np.save(f'assets/checkpoints/spaghetti_airplanes/{sample_dir_name}/codes/surface_feat_codebook.npy', surface_feat_codebook)
@@ -128,13 +144,52 @@ def quantize_surface_and_split_gmm(surface_feat_vocab_sz, cov_vocab_sz, eigenval
 
     
 
-vocab_sz = 256
-sample_dir_name = 'split_gmm_surface_feat_quantize'
-quantize_surface_and_split_gmm(
-    surface_feat_vocab_sz=vocab_sz, 
-    cov_vocab_sz=vocab_sz,
-    eigenval_vocab_sz=vocab_sz, 
-    center_vocab_sz=vocab_sz, 
-    mix_weight_vocab_sz=vocab_sz, 
+# vocab_sz = 128
+sample_dir_name = 'raw_gmm_surface_feat_quantize_512'
 
-    sample_dir_name=sample_dir_name)
+intrinsic_silhouette = []
+extrinsic_silhouette = []
+intrinsic_CH = []
+extrinsic_CH = []
+vocab_sizes = [64, 128, 256, 384, 512, 640, 768, 1024,2048,3072]
+for vocab_sz in vocab_sizes:
+    print("vocab sz: ", vocab_sz)
+    surface_clustering_CH, surface_clustering_silhouette, gmm_clustering_CH, gmm_clustering_silhouette = quantize_surface_and_raw_gmm(vocab_sz, vocab_sz, sample_dir_name)
+    intrinsic_CH.append(surface_clustering_CH)
+    extrinsic_CH.append(gmm_clustering_CH)
+    intrinsic_silhouette.append(surface_clustering_silhouette)
+    extrinsic_silhouette.append(gmm_clustering_silhouette)
+
+# plot cluster score vs vocab
+figure, axis = plt.subplots(nrows=1, ncols=2,figsize=(15, 5))
+axis[0].plot(vocab_sizes, intrinsic_CH, marker='o')
+axis[0].set_xlabel("Codebook size")
+axis[0].set_ylabel("CH Index")
+axis[0].set_title("Intrinsic vector CH Index (higher is better)")
+axis[1].plot(vocab_sizes, intrinsic_silhouette, marker='o')
+axis[1].set_xlabel("Codebook size")
+axis[1].set_ylabel("Silhouette Coeff")
+axis[1].set_title("Intrinsic vector Silhouette Coeff. (higher is better)")
+plt.savefig("experiments/surface_cluster_scores.jpg")
+plt.close()
+
+figure, axis = plt.subplots(nrows=1, ncols=2,figsize=(15, 5))
+axis[0].plot(vocab_sizes, extrinsic_CH, marker='o')
+axis[0].set_xlabel("Codebook size")
+axis[0].set_ylabel("CH Index")
+axis[0].set_title("Extrinsic vector CH Index (higher is better)")
+axis[1].plot(vocab_sizes, extrinsic_silhouette, marker='o')
+axis[1].set_xlabel("Codebook size")
+axis[1].set_ylabel("Silhouette Coeff")
+axis[1].set_title("Extrinsic vector Silhouette Coeff. (higher is better)")
+plt.savefig("experiments/raw_gmm_cluster_scores.jpg")
+plt.show()
+
+# quantize_surface_and_split_gmm(
+#     surface_feat_vocab_sz=vocab_sz, 
+#     cov_vocab_sz=vocab_sz,
+#     eigenval_vocab_sz=vocab_sz, 
+#     center_vocab_sz=vocab_sz, 
+#     mix_weight_vocab_sz=vocab_sz, 
+
+#     sample_dir_name=sample_dir_name)
