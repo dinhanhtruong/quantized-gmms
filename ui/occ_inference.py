@@ -36,16 +36,22 @@ class Inference:
             self.raw_mesh_names = data["ShapeNetV2"]["02691156"]
 
     def plot_occ(self, z: Union[T, TS], z_base, gmms: Optional[TS], fixed_items: T,
-                 folder_name: str, res=200, verbose=True, from_quantized=False):
+                 folder_name: str, res=200, verbose=True, from_quantized=False, tf_sample_dirname=''):
         self.load_mesh_names(f'{self.opt.cp_folder}/shapenet_airplanes_train.json')
         for i in range(fixed_items.shape[0]):
             mesh = self.get_mesh(z[i], res)  # mcubes
             # name = f'{fixed_items[i]:04d}' # OLD naming: use latent vec ID
             name = self.raw_mesh_names[i] # TEMP: use raw shapenet mesh name
-            if from_quantized:
+            if tf_sample_dirname:
+                name = f'sample_{i}' # overwrite
+            elif from_quantized:
                 name += '_quantized'
+                
             if mesh is not None:
-                files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{name}') # obj
+                if tf_sample_dirname:
+                    files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{tf_sample_dirname}/{name}')
+                else:
+                    files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{name}') # obj
                 # files_utils.save_pickle(z_base[i].detach().cpu(), f'{self.opt.cp_folder}/{folder_name}/occ/{name}')
                 if gmms is not None:
                     pass
@@ -198,7 +204,7 @@ class Inference:
     ###########################################
 
     @models_utils.torch_no_grad
-    def plot(self, folder_name: str, nums_sample: int, verbose=False, res: int = 200):
+    def plot(self, folder_name: str, nums_sample: int, verbose=False, res: int = 200, tf_sample_dirname=''):
         '''
         Saves reconstructions of training meshes
         '''
@@ -208,8 +214,10 @@ class Inference:
         else:
             print('using rand train subset')
             shape_samples = torch.randint(low=0, high=self.opt.dataset_size, size=(nums_sample,))
-        zh_base, _, gmms = self.model.get_embeddings(shape_samples.to(self.device), folder_name)
+        zh_base, _, gmms = self.model.get_embeddings(shape_samples.to(self.device), folder_name, tf_sample_dirname) # NOTE: quantized code overrides internally
+        print("zh_base: ", zh_base.shape)
         zh, attn_b = self.model.merge_zh(zh_base, gmms)
+        print("zh: ", zh.shape)
 
         # save mesh names
         from_quantized = False
@@ -221,7 +229,7 @@ class Inference:
             shape_samples = np.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy')
         # only reconstruct meshes for first n samples
         shape_samples = shape_samples[:nums_sample]
-        self.plot_occ(zh, zh_base, gmms, shape_samples, folder_name, verbose=True, res=res, from_quantized=from_quantized)
+        self.plot_occ(zh, zh_base, gmms, shape_samples, folder_name, verbose=True, res=res, from_quantized=from_quantized, tf_sample_dirname=tf_sample_dirname)
 
     def get_mesh_from_mid(self, gmm, included: T, res: int) -> Optional[T_Mesh]:
         if self.mid is None:

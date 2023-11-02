@@ -32,17 +32,18 @@ def get_p_direct(splitted: TS) -> T:
     p = p / torch.norm(p, p=2, dim=4)[:, :, :, :, None]  # + self.noise[None, None, :, :]
     return p
 
-def load_feats_from_indices(filepath, feat_name):
+def load_feats_from_indices(filepath, feat_name, tf_sample_dirname=''):
+    # prefix for TF outputs
+    prefix = 'sampled_' if tf_sample_dirname else ''
     # get indices
-    indices = np.load(f'{filepath}/{feat_name}_indices.npy') #[B, 1, m]
+    indices = np.load(f'{filepath}/{tf_sample_dirname}/{prefix}{feat_name}_indices.npy') #[B, 1, m]
     # get codebook
     codebook = np.load(f'{filepath}/{feat_name}_codebook.npy') #[vocab_sz, feat_dim]
     # index into codebook
-    print("indices: ", indices)
     print("indexed feats: ", codebook[indices].shape)
     return torch.tensor(codebook[indices]).cuda()
 
-def split_gm(splitted: TS, output_dir='') -> TS:
+def split_gm(splitted: TS, output_dir='', tf_sample_dirname='') -> TS:
     '''
     args:
         - splitted: list of tensors with shapes 5x[B,1,m,3], [B,1,m,1]
@@ -75,10 +76,10 @@ def split_gm(splitted: TS, output_dir='') -> TS:
     else:
         # load from disk
         print('loading existing per-param codes')
-        pre_orthog_cov = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'pre_orthog_covariances')
-        eigen = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'eigenvalues')
-        mu = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'centers')
-        phi = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'mixing_weights')
+        pre_orthog_cov = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'pre_orthog_covariances', tf_sample_dirname)
+        eigen = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'eigenvalues', tf_sample_dirname)
+        mu = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'centers', tf_sample_dirname)
+        phi = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'mixing_weights', tf_sample_dirname)
         phi = phi.view(phi.shape[:3]) # [B,1,16,1] -> [B,1,16]
         # split quantized pre-orthog cov into column vectors
         splitted = list(splitted)
@@ -192,7 +193,7 @@ class DecompositionControl(models_utils.Model):
         x = self.decomposition.forward_upper(x)
         return x
 
-    def forward_split(self, x: T, output_dir='') -> Tuple[T, TS]:
+    def forward_split(self, x: T, output_dir='', tf_sample_dirname='') -> Tuple[T, TS]:
         '''
         AT
 
@@ -245,11 +246,12 @@ class DecompositionControl(models_utils.Model):
         else:
             # load from disk
             print('loading existing codes')
-            zh = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes', 'surface_feats')
+            zh = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes', 'surface_feats', tf_sample_dirname=tf_sample_dirname)
+            zh = zh[:, 0, :, :] #[B, 1, m, d_surface] -> #[B, m, d_surface]
             # zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
             # zh = torch.tensor(zh).cuda()
 
-        gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3), output_dir=output_dir)
+        gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3), output_dir=output_dir, tf_sample_dirname=tf_sample_dirname)
         return zh, gmms
 
     @staticmethod
@@ -278,12 +280,12 @@ class DecompositionControl(models_utils.Model):
             # out.append(torch.cat((element_a[:, :, gaussian_perm], element_b[:, :, gaussian_perm]), dim=2))
         return out
 
-    def forward_mid(self, zs, output_dir='') -> Tuple[T, TS]:
+    def forward_mid(self, zs, output_dir='', tf_sample_dirname='') -> Tuple[T, TS]:
         '''
         Args
             - Z_b: [B, m, dim_h]
         '''
-        zh, gmms = self.forward_split(zs, output_dir)  # split z_b into surface vec + gaussian params
+        zh, gmms = self.forward_split(zs, output_dir, tf_sample_dirname)  # split z_b into surface vec + gaussian params
         if self.reflect is not None:
             print("REFLECTING")
             gmms_r = self.apply_gmm_affine(gmms, self.reflect)
@@ -294,7 +296,7 @@ class DecompositionControl(models_utils.Model):
         zs = self.decomposition(z_init)
         return zs
 
-    def forward(self, z_init, output_dir='') -> Tuple[T, TS]:
+    def forward(self, z_init, output_dir='', tf_sample_dirname='') -> Tuple[T, TS]:
         zs = self.forward_low(z_init) # split z_a into m part vectors (Z_b): [B, m, dim_h]
         # AT: 1st quantization scheme 
         # AT: save continuous z_b for quantization before splitting into surface/GMM vecs
@@ -314,7 +316,7 @@ class DecompositionControl(models_utils.Model):
         # perm = torch.randperm(8)
         # zs[:, :8] = zs[:, perm]
         # zs[:, 8:] = zs[:, 8+perm]
-        zh, gmms = self.forward_mid(zs, output_dir) # apply separate linear layers to get s_j and g_j
+        zh, gmms = self.forward_mid(zs, output_dir, tf_sample_dirname) # apply separate linear layers to get s_j and g_j
         return zh, gmms
 
     @staticmethod
@@ -374,12 +376,13 @@ class Spaghetti(models_utils.Model):
         zh, gmms = self.decomposition_control.forward_split(self.decomposition_control.forward_upper(z_b))
         return z_a, z_b, zh, gmms
 
-    def get_embeddings(self, item: T, output_dir=''):
+    def get_embeddings(self, item: T, output_dir='', tf_sample_dirname=''):
         '''
         use train embeddings
         '''
         z = self.get_z(item)
-        zh, gmms = self.decomposition_control(z, output_dir)
+        print("z: ", z.shape)
+        zh, gmms = self.decomposition_control(z, output_dir, tf_sample_dirname)
         return zh, z, gmms
 
     def merge_zh_step_a(self, zh, gmms):

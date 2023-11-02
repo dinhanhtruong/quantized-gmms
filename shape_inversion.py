@@ -234,7 +234,9 @@ def main():
                   '--output_name': {'default': 'samples', 'type': str},
                   '--mesh_path': {'default': './assets/mesh/example.obj', 'type': str},
                   '--source':  {'default': 'inversion', 'type': str, 'options': ('inversion', 'random', 'training')},
-                  '--num_samples':  {'default': 10, 'type': int, 'help': 'relevant for random or training'}}
+                  '--num_samples':  {'default': 10, 'type': int, 'help': 'relevant for random or training'},
+                  '--tf_sample_dirname': {'default': '', 'type': str, 'help': 'if set, will use quantized codes from sampled TF sequences in <ckpt>/codes/<tf_sample_dirname>'}
+                  }
     args = myparse.parse(for_parser)
     opt = options.Options(tag=args['model_name']) 
 
@@ -247,7 +249,7 @@ def main():
             model.random_plot(args['output_name'], args['num_samples'])
         else:
             # from training samples
-            model.plot(args['output_name'], args['num_samples'], res=400)
+            model.plot(args['output_name'], args['num_samples'], res=400, tf_sample_dirname=args['tf_sample_dirname'])
     return 0
 
 
