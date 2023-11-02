@@ -4,7 +4,7 @@ import os
 from tqdm import tqdm
 
 # contains continuous and quantized output mesh OBJs
-exp_name = 'split_gmm_surface_feat_quantize_256'
+exp_name = 'split_gmm_surface_feat_quantize_optimal'
 mesh_dir = f'assets/checkpoints/spaghetti_airplanes/{exp_name}/occ' # relative to root
 
 # get predicted and 'gt' mesh filepaths
@@ -13,6 +13,9 @@ num_comparisons = len(all_meshes)//2
 print("num comparisons: ", num_comparisons)
 gt_filepaths = [f'{mesh_dir}/{file}' for file in all_meshes if not file.endswith("_quantized.obj")]
 predicted_filepaths = [f'{mesh_dir}/{file}' for file in all_meshes if file.endswith("_quantized.obj")]
+
+ #TEMP for incomplete quantized MC recon
+gt_filepaths = gt_filepaths[:len(predicted_filepaths)]
 assert len(gt_filepaths) == len(predicted_filepaths)
 
 # compute chamfer + EMD
@@ -33,7 +36,7 @@ for gt_file, pred_file in tqdm(zip(gt_filepaths, predicted_filepaths), total=num
     pred_samples = pcu.interpolate_barycentric_coords(pred_f, face_ids, bary_coords, pred_v)
 
     chamfer_dists.append(pcu.chamfer_distance(gt_samples, pred_samples))
-    EMDs.append(pcu.earth_movers_distance(gt_samples[:n_samples_emd], pred_samples[:n_samples_emd])[0]) # ignore pairwise matrix
+    # EMDs.append(pcu.earth_movers_distance(gt_samples[:n_samples_emd], pred_samples[:n_samples_emd])[0]) # ignore pairwise matrix
 
 chamfer_dists = np.array(chamfer_dists)
 EMDs = np.array(EMDs)

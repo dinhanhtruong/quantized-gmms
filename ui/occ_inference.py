@@ -4,6 +4,9 @@ from options import Options
 from utils import train_utils, mcubes_meshing, files_utils, mesh_utils
 from models.occ_gmm import Spaghetti
 from models import models_utils
+import json
+
+
 
 
 class Inference:
@@ -25,12 +28,20 @@ class Inference:
     def get_mesh(self, z: T, res: int) -> Optional[T_Mesh]:
         mesh = self.meshing.occ_meshing(self.get_occ_fun(z), res=res)
         return mesh
+    
+    def load_mesh_names(self, mesh_names_path):
+        # TEMP: load train set raw mesh names
+        if not self.raw_mesh_names:
+            data = json.load(open(mesh_names_path))
+            self.raw_mesh_names = data["ShapeNetV2"]["02691156"]
 
     def plot_occ(self, z: Union[T, TS], z_base, gmms: Optional[TS], fixed_items: T,
                  folder_name: str, res=200, verbose=True, from_quantized=False):
+        self.load_mesh_names(f'{self.opt.cp_folder}/shapenet_airplanes_train.json')
         for i in range(fixed_items.shape[0]):
             mesh = self.get_mesh(z[i], res)  # mcubes
-            name = f'{fixed_items[i]:04d}'
+            # name = f'{fixed_items[i]:04d}' # OLD naming: use latent vec ID
+            name = self.raw_mesh_names[i] # TEMP: use raw shapenet mesh name
             if from_quantized:
                 name += '_quantized'
             if mesh is not None:
@@ -233,4 +244,5 @@ class Inference:
         self.mid: Optional[T] = None
         self.gmms: Optional[TN] = None
         self.meshing = mcubes_meshing.MarchingCubesMeshing(self.device, scale=1.)
+        self.raw_mesh_names = None
 

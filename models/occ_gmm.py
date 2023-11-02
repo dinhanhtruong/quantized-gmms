@@ -73,8 +73,7 @@ def split_gm(splitted: TS, output_dir='') -> TS:
         mu = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_centers.npy')
         mu = torch.tensor(mu).cuda()
         phi = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_mixing_weights.npy')
-        phi = torch.tensor(phi).cuda()
-
+        phi = torch.tensor(phi).cuda().view(phi.shape[:3]) # [B,1,16,1] -> [B,1,16]
         # split quantized pre-orthog cov into column vectors
         splitted = list(splitted)
         splitted[0] = pre_orthog_cov[..., :3]
@@ -202,24 +201,33 @@ class DecompositionControl(models_utils.Model):
         # NOTE: with reflection symmetry on, only the first half of m gaussians matter, since they get reflected and concat'ed. 
             # the remaining half are discarded (although their surface vecs remain)
         raw_gmm = self.to_gmm(x).unsqueeze(1)  #linear. [B, 1, m, 16] 
+        raw_gmm_shape= raw_gmm.shape  #linear. [B, 1, m, 16] 
         zh = self.to_s(x) #linear
         zh = zh.view(b, -1, zh.shape[-1]) #[B, m, d_surface]
+        zh_shape = zh.shape #[B, m, d_surface]
 
         # AT: 2nd quantization scheme (raw GMM + s_j)
         # assert output_dir
         # save_path = f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/'
-        # if not os.path.exists(f'{save_path}/raw_gmms.npy'):
+        # if not os.path.exists(f'{save_path}/raw_gmm.npy'):
         #     print("saving new codes")
         #     os.makedirs(save_path)
-        #     np.save(f'{save_path}/raw_gmms.npy', raw_gmm.detach().cpu().numpy()) #[B, 1, m, 16] 
-        #     np.save(f'{save_path}/surface_feats.npy', zh.detach().cpu().numpy()) #[B, m, d_surface]
+        #     np.save(f'{save_path}/raw_gmm.npy', raw_gmm.detach().cpu().numpy()) #[B, 1, m, 16] 
+        #     np.save(f'{save_path}/surface_feat.npy', zh.detach().cpu().numpy()) #[B, m, d_surface]
         # else:
         #     # load from disk
         #     print('loading existing codes')
-        #     raw_gmm = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_raw_gmms.npy')
-        #     raw_gmm = torch.tensor(raw_gmm).cuda()
-        #     zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
-        #     zh = torch.tensor(zh).cuda()
+        #     raw_gmm = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_raw_gmm.npy')
+        #     raw_gmm = torch.tensor(raw_gmm).cuda().view(-1, raw_gmm_shape[1:])
+        #     zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feat.npy')
+        #     zh = torch.tensor(zh).cuda().view(-1, zh_shape[1:])
+
+        #     # shuffle and sample B shapes
+        #     torch.manual_seed(0)
+        #     randperm = torch.randperm(b)
+        #     print("randperm: ", randperm[:5])
+        #     raw_gmm = raw_gmm[randperm]
+        #     zh = zh[randperm]
 
         # AT: 3rd quantization scheme, part 1 (per-GMM param + s_j)
         assert output_dir
