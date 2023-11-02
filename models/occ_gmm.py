@@ -32,6 +32,15 @@ def get_p_direct(splitted: TS) -> T:
     p = p / torch.norm(p, p=2, dim=4)[:, :, :, :, None]  # + self.noise[None, None, :, :]
     return p
 
+def load_feats_from_indices(filepath, feat_name):
+    # get indices
+    indices = np.load(f'{filepath}/{feat_name}_indices.npy') #[B, 1, m]
+    # get codebook
+    codebook = np.load(f'{filepath}/{feat_name}_codebook.npy') #[vocab_sz, feat_dim]
+    # index into codebook
+    print("indices: ", indices)
+    print("indexed feats: ", codebook[indices].shape)
+    return torch.tensor(codebook[indices]).cuda()
 
 def split_gm(splitted: TS, output_dir='') -> TS:
     '''
@@ -66,14 +75,11 @@ def split_gm(splitted: TS, output_dir='') -> TS:
     else:
         # load from disk
         print('loading existing per-param codes')
-        pre_orthog_cov = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_pre_orthog_covariances.npy')
-        pre_orthog_cov = torch.tensor(pre_orthog_cov).cuda()
-        eigen = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_eigenvalues.npy')
-        eigen = torch.tensor(eigen).cuda()
-        mu = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_centers.npy')
-        mu = torch.tensor(mu).cuda()
-        phi = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_mixing_weights.npy')
-        phi = torch.tensor(phi).cuda().view(phi.shape[:3]) # [B,1,16,1] -> [B,1,16]
+        pre_orthog_cov = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'pre_orthog_covariances')
+        eigen = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'eigenvalues')
+        mu = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'centers')
+        phi = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'mixing_weights')
+        phi = phi.view(phi.shape[:3]) # [B,1,16,1] -> [B,1,16]
         # split quantized pre-orthog cov into column vectors
         splitted = list(splitted)
         splitted[0] = pre_orthog_cov[..., :3]
@@ -239,8 +245,9 @@ class DecompositionControl(models_utils.Model):
         else:
             # load from disk
             print('loading existing codes')
-            zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
-            zh = torch.tensor(zh).cuda()
+            zh = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes', 'surface_feats')
+            # zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
+            # zh = torch.tensor(zh).cuda()
 
         gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3), output_dir=output_dir)
         return zh, gmms
