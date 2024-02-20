@@ -6,7 +6,36 @@ from models.occ_gmm import Spaghetti
 from models import models_utils
 import json
 
+def get_gm_support(gm, x):
+    dim = x.shape[-1] #3
+    mu, p, phi, eigen = gm
+    sigma_det = eigen.prod(-1)
+    eigen_inv = 1 / eigen
+    sigma_inverse = torch.matmul(p.transpose(3, 4), p * eigen_inv[:, :, :, :, None]).squeeze(1)
+    phi = torch.softmax(phi, dim=2)
+    const_1 = phi / torch.sqrt((2 * np.pi) ** dim * sigma_det)
+    distance = x[:, :, None, :] - mu
+    mahalanobis_distance = - .5 * torch.einsum('bngd,bgdc,bngc->bng', distance, sigma_inverse, distance)
+    const_2, _ = mahalanobis_distance.max(dim=2)  # for numeric stability
+    mahalanobis_distance -= const_2[:, :, None]
+    support = const_1 * torch.exp(mahalanobis_distance)
+    return support, const_2
 
+
+def gm_log_likelihood_loss(gms: TS, x: T, reduction: str = "mean") -> Union[T, Tuple[T, TS]]:
+
+    # batch_size, num_points, dim = x.shape
+    support, const = get_gm_support(gms, x)
+
+    # probs = torch.log(support.sum(dim=2)) + const
+    # if reduction == 'none':
+    #     likelihood = probs.sum(-1)
+    #     loss = - likelihood / num_points
+    # else:
+    #     likelihood = probs.sum()
+    #     loss = - likelihood / (probs.shape[0] * probs.shape[1])
+
+    return support
 
 
 class Inference:
@@ -35,23 +64,89 @@ class Inference:
             data = json.load(open(mesh_names_path))
             self.raw_mesh_names = data["ShapeNetV2"]["02691156"]
 
+    def get_top_gaussian_colors(self, sample_points, gmms):
+        '''
+        Retrieves vertex colors for a single shape
+
+        Args
+            - sample_points: [v, 3]
+            - gmms: collection of gmm params:
+                - mu=centroids  [m,3]
+                - p=factorized cov matrices [m, 3,3]
+                - phi=mixing weights [m]
+                - eigenvals  [m,3]
+
+        returns: int RGB vertex colors[v, 3]
+        '''
+        sample_points = sample_points.cuda()
+        means, p, mix_weights, eigenvals = gmms
+        num_parts = mix_weights.shape[0]
+        assert num_parts == 16
+        gmm_sample_vals = []
+        print("v: ", sample_points.shape)
+
+        # reshape to [1, ...] for batch dim compatibility
+        sample_points = sample_points.unsqueeze(0)
+        # reshape to original with batch dim 1
+        gmms = (means.view(1,1,-1,3), p.view(1,1,-1,3,3), mix_weights.view(1,1,-1), eigenvals.view(1,1,-1,3))
+
+        gmm_sample_vals = get_gm_support(gmms, sample_points)[0][0] #ignore aux 2nd output, get 1st item w batch sz=1. shape [v,m]
+
+        # get argmax gaussian for each vert sample
+        gaussian_labels = torch.argmax(gmm_sample_vals, dim=1) #[v]
+        print("gaussian labels: ", gaussian_labels)
+        print("num unique: ", torch.unique(gaussian_labels))
+        # gmm_colors = torch.randint(0,255, (num_parts, 3)).cuda()
+        gmm_colors = torch.tensor([
+            [47,80,80],
+            [127,0,0],
+            [25,25,112],
+            [0,100,0],
+            [255,0,0],
+            [255,165,0],
+            [255,255,0],
+            [0,255,0],
+            [0,255,255],
+            [0,0,255],
+            [255,0,255],
+            [30,144,255],
+            [220,160,220],
+            [144,240,144],
+            [255,20,150],
+            [255,220,185]
+        ]).cuda()
+
+        return gmm_colors[gaussian_labels]
+
+
     def plot_occ(self, z: Union[T, TS], z_base, gmms: Optional[TS], fixed_items: T,
                  folder_name: str, res=200, verbose=True, from_quantized=False, tf_sample_dirname=''):
         self.load_mesh_names(f'{self.opt.cp_folder}/shapenet_airplanes_train.json')
+        
+        means, eigenvecs, mix_weights, eigenvals = gmms
+        
         for i in range(fixed_items.shape[0]):
-            mesh = self.get_mesh(z[i], res)  # mcubes
+            if i == 12:
+                exit()
+            mesh = self.get_mesh(z[i], res)  # mcubes.  tuple of (V,F)
             # name = f'{fixed_items[i]:04d}' # OLD naming: use latent vec ID
             name = self.raw_mesh_names[i] # TEMP: use raw shapenet mesh name
             if tf_sample_dirname:
-                name = f'sample_{i}' # overwrite
+                name = f'sample_{i}' # overwrite name; ignore shapenet IDs
             elif from_quantized:
                 name += '_quantized'
                 
             if mesh is not None:
+                # temp: color verts based on gaussian maximimizing likelihood
+                vert_colors = self.get_top_gaussian_colors(
+                    mesh[0], 
+                    (means[i,0], eigenvecs[i,0], mix_weights[i,0], eigenvals[i,0])
+                )
                 if tf_sample_dirname:
-                    files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{tf_sample_dirname}/{name}')
+                    # vert_colors = torch.randint(0, 255, (mesh[0].shape[0], 3)) #[v,3]
+                    files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{tf_sample_dirname}/{name}', vert_colors)
                 else:
-                    files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{name}') # obj
+                    files_utils.export_mesh(mesh, f'{self.opt.cp_folder}/{folder_name}/occ/{name}', vert_colors) # obj
                 # files_utils.save_pickle(z_base[i].detach().cpu(), f'{self.opt.cp_folder}/{folder_name}/occ/{name}')
                 if gmms is not None:
                     pass
@@ -212,10 +307,11 @@ class Inference:
             print("using ALL train data")
             shape_samples = torch.arange(self.model.opt.dataset_size)
         else:
-            print('using rand train subset')
+            print('using rand train subset (if no TF samples specified)')
             shape_samples = torch.randint(low=0, high=self.opt.dataset_size, size=(nums_sample,))
+        if tf_sample_dirname:
+            print("using TF samples from ", tf_sample_dirname)
         zh_base, _, gmms = self.model.get_embeddings(shape_samples.to(self.device), folder_name, tf_sample_dirname) # NOTE: quantized code overrides internally
-        print("zh_base: ", zh_base.shape)
         zh, attn_b = self.model.merge_zh(zh_base, gmms)
         print("zh: ", zh.shape)
 

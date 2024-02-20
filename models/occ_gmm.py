@@ -247,7 +247,9 @@ class DecompositionControl(models_utils.Model):
             # load from disk
             print('loading existing codes')
             zh = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes', 'surface_feats', tf_sample_dirname=tf_sample_dirname)
-            zh = zh[:, 0, :, :] #[B, 1, m, d_surface] -> #[B, m, d_surface]
+            if zh.dim() == 4: # incompatibility b/t TF indices and quantized indices
+                zh = zh[:, 0, :, :] #[B, 1, m, d_surface] -> #[B, m, d_surface].  
+                
             # zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
             # zh = torch.tensor(zh).cuda()
 
@@ -381,7 +383,6 @@ class Spaghetti(models_utils.Model):
         use train embeddings
         '''
         z = self.get_z(item)
-        print("z: ", z.shape)
         zh, gmms = self.decomposition_control(z, output_dir, tf_sample_dirname)
         return zh, z, gmms
 
