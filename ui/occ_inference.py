@@ -64,7 +64,7 @@ class Inference:
             data = json.load(open(mesh_names_path))
             self.raw_mesh_names = data["ShapeNetV2"]["02691156"]
 
-    def get_top_gaussian_colors(self, sample_points, gmms):
+    def get_top_gaussian_colors(self, sample_points, gmms, attn_weights=None):
         '''
         Retrieves vertex colors for a single shape
 
@@ -75,6 +75,7 @@ class Inference:
                 - p=factorized cov matrices [m, 3,3]
                 - phi=mixing weights [m]
                 - eigenvals  [m,3]
+            - attn_weights: [m,]
 
         returns: int RGB vertex colors[v, 3]
         '''
@@ -96,43 +97,110 @@ class Inference:
         gaussian_labels = torch.argmax(gmm_sample_vals, dim=1) #[v]
         print("gaussian labels: ", gaussian_labels)
         print("num unique: ", torch.unique(gaussian_labels))
-        # gmm_colors = torch.randint(0,255, (num_parts, 3)).cuda()
-        gmm_colors = torch.tensor([
-            [47,80,80],
-            [127,0,0],
-            [25,25,112],
-            [0,100,0],
+        
+        if attn_weights is not None:
+            print("using attention weights for coloring")
+            gmm_color_weights = attn_weights.unsqueeze(1)  # [m, 1]
+        else:
+            gmm_color_weights = (torch.arange(16)/15).view(16,1).cuda()
+        red = torch.tensor([
             [255,0,0],
-            [255,165,0],
-            [255,255,0],
-            [0,255,0],
-            [0,255,255],
-            [0,0,255],
-            [255,0,255],
-            [30,144,255],
-            [220,160,220],
-            [144,240,144],
-            [255,20,150],
-            [255,220,185]
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0],
+            [255,0,0]
         ]).cuda()
-
+        green = torch.tensor([
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0],
+            [0,255,0]
+        ]).cuda()
+        # interpolate b/t red and green (red = highest weight)
+        gmm_colors = gmm_color_weights*red + (1-gmm_color_weights)*green
+        
+        # gmm_colors = torch.tensor([
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [255,0,0],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [150,150,150]
+        # ]).cuda()
+        
+        # gmm_colors = torch.tensor([
+        #     [47,80,80],
+        #     [127,0,0],
+        #     [25,25,112],
+        #     [0,100,0],
+        #     [255,0,0],
+        #     [255,165,0],
+        #     [255,255,0],
+        #     [0,255,0],
+        #     [0,255,255],
+        #     [0,0,255],
+        #     [255,0,255],
+        #     [30,144,255],
+        #     [220,160,220],
+        #     [144,240,144],
+        #     [255,20,150],
+        #     [255,220,185]
+        # ]).cuda()
+        print("palette: ")
+        print(gmm_colors)
         return gmm_colors[gaussian_labels]
 
 
     def plot_occ(self, z: Union[T, TS], z_base, gmms: Optional[TS], fixed_items: T,
-                 folder_name: str, res=200, verbose=True, from_quantized=False, tf_sample_dirname=''):
+                 folder_name: str, res=200, verbose=True, from_quantized=False, tf_sample_dirname='', attn_weights=None):
         self.load_mesh_names(f'{self.opt.cp_folder}/shapenet_airplanes_train.json')
         
         means, eigenvecs, mix_weights, eigenvals = gmms
         
-        for i in range(fixed_items.shape[0]):
-            if i == 12:
+        for i, spaghetti_shape_idx in enumerate(fixed_items):
+            spaghetti_shape_idx = spaghetti_shape_idx.item()
+            if i == 6:
                 exit()
-            mesh = self.get_mesh(z[i], res)  # mcubes.  tuple of (V,F)
+            mesh = self.get_mesh(z[spaghetti_shape_idx], res)  # mcubes.  tuple of (V,F)
             # name = f'{fixed_items[i]:04d}' # OLD naming: use latent vec ID
-            name = self.raw_mesh_names[i] # TEMP: use raw shapenet mesh name
+            name = self.raw_mesh_names[spaghetti_shape_idx] # TEMP: use raw shapenet mesh name
             if tf_sample_dirname:
                 name = f'sample_{i}' # overwrite name; ignore shapenet IDs
+            elif attn_weights is not None:
+                name += '_attn_colored'
             elif from_quantized:
                 name += '_quantized'
                 
@@ -140,7 +208,8 @@ class Inference:
                 # temp: color verts based on gaussian maximimizing likelihood
                 vert_colors = self.get_top_gaussian_colors(
                     mesh[0], 
-                    (means[i,0], eigenvecs[i,0], mix_weights[i,0], eigenvals[i,0])
+                    (means[spaghetti_shape_idx,0], eigenvecs[spaghetti_shape_idx,0], mix_weights[spaghetti_shape_idx,0], eigenvals[spaghetti_shape_idx,0]),
+                    attn_weights=None if attn_weights is None else attn_weights[i]
                 )
                 if tf_sample_dirname:
                     # vert_colors = torch.randint(0, 255, (mesh[0].shape[0], 3)) #[v,3]
@@ -150,7 +219,7 @@ class Inference:
                 # files_utils.save_pickle(z_base[i].detach().cpu(), f'{self.opt.cp_folder}/{folder_name}/occ/{name}')
                 if gmms is not None:
                     pass
-                    files_utils.export_gmm(gmms, i, f'{self.opt.cp_folder}/{folder_name}/gmms/{name}')
+                    files_utils.export_gmm(gmms, spaghetti_shape_idx, f'{self.opt.cp_folder}/{folder_name}/gmms/{name}')
             if verbose:
                 print(f'done {i + 1:d}/{len(z):d}')
 
@@ -299,11 +368,24 @@ class Inference:
     ###########################################
 
     @models_utils.torch_no_grad
-    def plot(self, folder_name: str, nums_sample: int, verbose=False, res: int = 200, tf_sample_dirname=''):
+    def plot(self, folder_name: str, nums_sample: int, verbose=False, res: int = 200, tf_sample_dirname='', attn_weights_path=''):
         '''
         Saves reconstructions of training meshes
         '''
-        if self.model.opt.dataset_size < nums_sample:
+        attn_weights = None
+        if attn_weights_path:
+            assert not tf_sample_dirname # want standard quantized reconstruction process
+            shape_samples = os.path.basename(attn_weights_path)[:-3].split("_")[-1]
+            print(shape_samples)
+            shape_samples = shape_samples.split("-")
+            shape_samples = torch.tensor([int(x) for x in shape_samples]) # ints
+            print("attn weight context shapes: ", shape_samples)
+            attn_weights = torch.load(attn_weights_path) # [total_n_parts,]
+            # linearly rescale attention weights to [0,1] range
+            attn_weights = (attn_weights - torch.min(attn_weights))/(torch.max(attn_weights) - torch.min(attn_weights))
+            attn_weights = attn_weights.view(shape_samples.shape[0], -1) # [n_priming_shapes, n_parts]
+            print("scaled attn: ", attn_weights)
+        elif self.model.opt.dataset_size < nums_sample:
             print("using ALL train data")
             shape_samples = torch.arange(self.model.opt.dataset_size)
         else:
@@ -317,15 +399,16 @@ class Inference:
 
         # save mesh names
         from_quantized = False
-        if not os.path.exists(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy'):
-            np.save(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy', shape_samples.detach().cpu().numpy())
-        else:
-            print('using existing mesh names')
-            from_quantized = True
-            shape_samples = np.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy')
+        if not attn_weights_path: 
+            if not os.path.exists(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy'):
+                np.save(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy', shape_samples.detach().cpu().numpy())
+            else:
+                print('using existing mesh names')
+                from_quantized = True
+                shape_samples = np.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy')
         # only reconstruct meshes for first n samples
         shape_samples = shape_samples[:nums_sample]
-        self.plot_occ(zh, zh_base, gmms, shape_samples, folder_name, verbose=True, res=res, from_quantized=from_quantized, tf_sample_dirname=tf_sample_dirname)
+        self.plot_occ(zh, zh_base, gmms, shape_samples, folder_name, verbose=True, res=res, from_quantized=from_quantized, tf_sample_dirname=tf_sample_dirname, attn_weights=attn_weights)
 
     def get_mesh_from_mid(self, gmm, included: T, res: int) -> Optional[T_Mesh]:
         if self.mid is None:
