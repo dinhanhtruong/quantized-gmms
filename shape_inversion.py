@@ -250,7 +250,7 @@ def main():
             model.random_plot(args['output_name'], args['num_samples'])
         else:
             # from training samples
-            model.plot(args['output_name'], args['num_samples'], res=175, tf_sample_dirname=args['tf_sample_dirname'], attn_weights_path=args['attn_weights_path']) #400 res def
+            model.plot(args['output_name'], args['num_samples'], res=200, tf_sample_dirname=args['tf_sample_dirname'], attn_weights_path=args['attn_weights_path']) #400 res def
     return 0
 
 

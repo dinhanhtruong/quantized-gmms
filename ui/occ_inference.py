@@ -144,23 +144,44 @@ class Inference:
         
         # gmm_colors = torch.tensor([
         #     [150,150,150],
+        #     [127,0,0],
         #     [150,150,150],
         #     [150,150,150],
         #     [150,150,150],
+        #     [255,165,0],
+        #     [255,255,0],
+        #     [150,150,150],
+        #     [150,150,150],
+        #     [0,0,255],
         #     [150,150,150],
         #     [150,150,150],
         #     [150,150,150],
-        #     [150,150,150],
-        #     [150,150,150],
-        #     [255,0,0],
-        #     [150,150,150],
-        #     [150,150,150],
-        #     [150,150,150],
-        #     [150,150,150],
+        #     [144,240,144],
         #     [150,150,150],
         #     [150,150,150]
         # ]).cuda()
+
+        # part group colors
+        # gmm_colors = torch.tensor([
+        #     [127,0,0],
+        #     [144,240,144],
+        #     [127,0,0],
+        #     [127,0,0],
+        #     [127,0,0],
+        #     [255,255,0],
+        #     [0,0,255],
+        #     [255,165,0],
+        #     [127,0,0],
+        #     [144,240,144],
+        #     [127,0,0],
+        #     [127,0,0],
+        #     [127,0,0],
+        #     [255,255,0],
+        #     [0,0,255],
+        #     [255,165,0]
+        # ]).cuda()
         
+        # # high contrast colors
         # gmm_colors = torch.tensor([
         #     [47,80,80],
         #     [127,0,0],
@@ -179,8 +200,7 @@ class Inference:
         #     [255,20,150],
         #     [255,220,185]
         # ]).cuda()
-        print("palette: ")
-        print(gmm_colors)
+        
         return gmm_colors[gaussian_labels]
 
 
@@ -192,11 +212,11 @@ class Inference:
         
         for i, spaghetti_shape_idx in enumerate(fixed_items):
             spaghetti_shape_idx = spaghetti_shape_idx.item()
-            if i == 6:
-                exit()
+            # if i == 6:
+            #     exit()
             mesh = self.get_mesh(z[spaghetti_shape_idx], res)  # mcubes.  tuple of (V,F)
             # name = f'{fixed_items[i]:04d}' # OLD naming: use latent vec ID
-            name = self.raw_mesh_names[spaghetti_shape_idx] # TEMP: use raw shapenet mesh name
+            name = self.raw_mesh_names[spaghetti_shape_idx] # use raw shapenet mesh name
             if tf_sample_dirname:
                 name = f'sample_{i}' # overwrite name; ignore shapenet IDs
             elif attn_weights is not None:
@@ -406,6 +426,12 @@ class Inference:
                 print('using existing mesh names')
                 from_quantized = True
                 shape_samples = np.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy')
+                #NOTE: TEMP
+                shape_samples = torch.arange(self.model.opt.dataset_size)
+        
+        # TEMPP
+        # shape_samples = torch.tensor([int(x) for x in [0,1019,103,1030,1037,1042,1043,1051,106]])
+
         # only reconstruct meshes for first n samples
         shape_samples = shape_samples[:nums_sample]
         self.plot_occ(zh, zh_base, gmms, shape_samples, folder_name, verbose=True, res=res, from_quantized=from_quantized, tf_sample_dirname=tf_sample_dirname, attn_weights=attn_weights)
