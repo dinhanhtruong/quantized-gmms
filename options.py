@@ -4,6 +4,8 @@ import pickle
 import constants as const
 from custom_types import *
 
+recon_sample_offset = 0
+use_quantized = False  # set to true if want to save/load quantized codes
 
 class Options:
 

@@ -1,6 +1,7 @@
 import os
 import random
-from options import Options
+from options import Options, recon_sample_offset
+import options
 from models import models_utils, transformer
 import constants
 from custom_types import *
@@ -36,14 +37,14 @@ def load_feats_from_indices(filepath, feat_name, tf_sample_dirname=''):
     # prefix for TF outputs
     prefix = 'sampled_' if tf_sample_dirname else ''
     # get indices
-    indices = np.load(f'{filepath}/{tf_sample_dirname}/{prefix}{feat_name}_indices.npy') #[B, 1, m]
+    indices = np.load(f'{filepath}/{tf_sample_dirname}/{prefix}{feat_name}_indices.npy')[options.recon_sample_offset:options.recon_sample_offset+22000] #[B, 1, m]
     # get codebook
     codebook = np.load(f'{filepath}/{feat_name}_codebook.npy') #[vocab_sz, feat_dim]
     # index into codebook
     print("indexed feats: ", codebook[indices].shape)
     return torch.tensor(codebook[indices]).cuda()
 
-def split_gm(splitted: TS, output_dir='', tf_sample_dirname='') -> TS:
+def split_gm(splitted: TS, output_dir='', tf_sample_dirname='', saved_codes_dirname='codes_combined') -> TS:
     '''
     args:
         - splitted: list of tensors with shapes 5x[B,1,m,3], [B,1,m,1]
@@ -66,6 +67,7 @@ def split_gm(splitted: TS, output_dir='', tf_sample_dirname='') -> TS:
 
     # AT: 3rd quantization scheme, pt 2 (per-GMM param + s_j)
     assert output_dir
+    print("USING QUANTIZED CODES")
     save_path = f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/'
     if not os.path.exists(f'{save_path}/pre_orthog_covariances.npy'):
         print("saving new per-param codes")
@@ -74,20 +76,35 @@ def split_gm(splitted: TS, output_dir='', tf_sample_dirname='') -> TS:
         np.save(f'{save_path}/centers.npy', mu.detach().cpu().numpy()) # [B,1,m,3]
         np.save(f'{save_path}/mixing_weights.npy', phi.detach().cpu().numpy()) # [B,1,m]
     else:
-        # load from disk
-        print('loading existing per-param codes')
-        pre_orthog_cov = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'pre_orthog_covariances', tf_sample_dirname)
-        eigen = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'eigenvalues', tf_sample_dirname)
-        mu = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'centers', tf_sample_dirname)
-        phi = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'mixing_weights', tf_sample_dirname)
-        phi = phi.view(phi.shape[:3]) # [B,1,16,1] -> [B,1,16]
-        # split quantized pre-orthog cov into column vectors
+        if options.use_quantized:
+            # load QUANTIZED codes from disk
+            print('loading existing per-param quantized codes')
+            pre_orthog_cov = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'pre_orthog_covariances', tf_sample_dirname)
+            eigen = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'eigenvalues', tf_sample_dirname)
+            mu = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'centers', tf_sample_dirname)
+            phi = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/', 'mixing_weights', tf_sample_dirname)
+            phi = phi.view(phi.shape[:3]) # [B,1,16,1] -> [B,1,16]
+            # # split quantized pre-orthog cov into column vectors
+            # splitted = list(splitted)
+            # splitted[0] = pre_orthog_cov[..., :3]
+            # splitted[1] = pre_orthog_cov[..., 3:6]
+            # splitted[2] = pre_orthog_cov[..., 6:] # remaining elements of splitted aren't used in get_p_direct
+            # splitted = tuple(splitted)
+        else:
+            # load continuous codes 
+            print('loading existing continuous codes')
+            pre_orthog_cov = torch.tensor(np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/{saved_codes_dirname}/pre_orthog_covariances.npy')).cuda()
+            eigen = torch.tensor(np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/{saved_codes_dirname}/eigenvalues.npy')).cuda()
+            mu = torch.tensor(np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/{saved_codes_dirname}/centers.npy')).cuda()
+            phi = torch.tensor(np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/{saved_codes_dirname}/mixing_weights.npy')).cuda()
+            # phi = phi.view(phi.shape[:3]) # [B,1,16,1] -> [B,1,16]
+        # split saved pre-orthog cov into column vectors
         splitted = list(splitted)
         splitted[0] = pre_orthog_cov[..., :3]
         splitted[1] = pre_orthog_cov[..., 3:6]
         splitted[2] = pre_orthog_cov[..., 6:] # remaining elements of splitted aren't used in get_p_direct
         splitted = tuple(splitted)
-    
+
     p = get_p_direct(splitted) # 3x3 factorized covariance matrix [B, 1, m, 3,3]
     print('p:', p.shape)
     print('eig:', eigen.shape)
@@ -193,7 +210,7 @@ class DecompositionControl(models_utils.Model):
         x = self.decomposition.forward_upper(x)
         return x
 
-    def forward_split(self, x: T, output_dir='', tf_sample_dirname='') -> Tuple[T, TS]:
+    def forward_split(self, x: T, output_dir='', tf_sample_dirname='', saved_codes_dirname='codes_combined') -> Tuple[T, TS]:
         '''
         AT
 
@@ -244,14 +261,19 @@ class DecompositionControl(models_utils.Model):
             os.makedirs(save_path)
             np.save(f'{save_path}/surface_feats.npy', zh.detach().cpu().numpy()) #[B, m, d_surface]
         else:
-            # load from disk
-            print('loading existing codes')
-            zh = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes', 'surface_feats', tf_sample_dirname=tf_sample_dirname)
-            if zh.dim() == 4: # incompatibility b/t TF indices and quantized indices
-                zh = zh[:, 0, :, :] #[B, 1, m, d_surface] -> #[B, m, d_surface].  
-                
-            # zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
-            # zh = torch.tensor(zh).cuda()
+            if options.use_quantized:
+                # load from disk
+                # print('loading existing quantized codes')
+                zh = load_feats_from_indices(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes', 'surface_feats', tf_sample_dirname=tf_sample_dirname)
+                if zh.dim() == 4: # incompatibility b/t TF indices and quantized indices
+                    zh = zh[:, 0, :, :] #[B, 1, m, d_surface] -> #[B, m, d_surface].  
+                    
+                # zh = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_surface_feats.npy')
+                # zh = torch.tensor(zh).cuda()
+            else:
+                zh = torch.tensor(np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/{saved_codes_dirname}/surface_feats.npy')).cuda()
+                if zh.dim() == 4: # incompatibility b/t TF indices and quantized indices
+                    zh = zh[:, 0, :, :] #[B, 1, m, d_surface] -> #[B, m, d_surface].  
 
         gmms = split_gm(torch.split(raw_gmm, self.split_shape, dim=3), output_dir=output_dir, tf_sample_dirname=tf_sample_dirname)
         return zh, gmms
@@ -395,10 +417,64 @@ class Spaghetti(models_utils.Model):
         zh_ = zh + z_gmm # see eq 7
         return zh_
 
-    def merge_zh(self, zh, gmms, mask: Optional[T] = None) -> TNS:
+    def compose_part_groups(self, tuples_id_to_part_group, zc, gmms):
+        """
+        tuples_id_to_part_group: list of dicts, one per tuple. Each dict maps priming ids to the borrowed part group idx
+        zc: [full_dataset_sz, m, dim]
+        gmms: list of 4 x [B, 1,m,..]
+
+        Returns: 
+            - composed shapes zc: [len(dict), m, dim]
+            - composed gaussians: 4 x [len(dict), 1,m, ..] where correct gaussians are borrowed
+        """
+        gmms_0 = [] #[len(dict), 1, m, dim]
+        gmms_1 = []
+        gmms_2 = []
+        gmms_3 = []
+
+        part_groups = {
+            0: [0, 2, 3, 4, 8, 10, 11, 12], #body
+            1: [7, 15], # outer wing
+            2: [5, 13], # tail horiz stabilizer
+            3: [6, 14], # tail vert wing
+            4: [1, 9], #inner wing/engien
+        }
+        def sort_dict(dict):
+            new_dict= {}
+            for key, value in sorted(dict.items()): # Note the () after items!
+                new_dict[key] = value
+            return new_dict
+        composed_shapes_zc = -torch.ones((len(tuples_id_to_part_group), zc.shape[1], zc.shape[2]))
+        for i, tuple in enumerate(tuples_id_to_part_group):
+            curr_gmm0 = {} #stores gaussian id -> [dim,]
+            curr_gmm1 = {} #stores gaussian id -> [dim,]
+            curr_gmm2 = {} #stores gaussian id -> [dim,]
+            curr_gmm3 = {} #stores gaussian id -> [dim,]
+            for priming_shape_idx, part_group_to_borrow in tuple.items():
+                # for this priming shape, copy the chosen group's parts to the output
+                for gaussian_id in part_groups[part_group_to_borrow]:
+                    composed_shapes_zc[i, gaussian_id] = zc[priming_shape_idx, gaussian_id]
+                    curr_gmm0[gaussian_id] = gmms[0][priming_shape_idx, 0, gaussian_id] #[dim,]
+                    curr_gmm1[gaussian_id] = gmms[1][priming_shape_idx, 0, gaussian_id] #[dim,]
+                    curr_gmm2[gaussian_id] = gmms[2][priming_shape_idx, 0, gaussian_id].unsqueeze(0) #[dim,]
+                    curr_gmm3[gaussian_id] = gmms[3][priming_shape_idx, 0, gaussian_id] #[dim,]
+            gmms_0.append(torch.stack(list(sort_dict(curr_gmm0).values()),  dim=0))
+            gmms_1.append(torch.stack(list(sort_dict(curr_gmm1).values()),  dim=0))
+            gmms_2.append(torch.stack(list(sort_dict(curr_gmm2).values()),  dim=0))
+            gmms_3.append(torch.stack(list(sort_dict(curr_gmm3).values()),  dim=0))
+        gmms_0 = torch.stack(gmms_0).unsqueeze(1)
+        gmms_1 = torch.stack(gmms_1).unsqueeze(1)
+        gmms_2 = torch.stack(gmms_2).squeeze(dim=2).unsqueeze(1)
+        gmms_3 = torch.stack(gmms_3).unsqueeze(1)
+        return composed_shapes_zc.cuda(), [gmms_0, gmms_1,gmms_2,gmms_3]
+
+    def merge_zh(self, zh, gmms, mask: Optional[T] = None, tuples_id_to_part_group=None) -> TNS:
         zh_ = self.merge_zh_step_a(zh, gmms) # z^_b part-level control (eq 7)
+        if tuples_id_to_part_group:
+            print("composing part groups")
+            zh_, gmms = self.compose_part_groups(tuples_id_to_part_group, zh_, gmms)
         zh_, attn = self.mixing_network.forward_with_attention(zh_, mask=mask)  # z_c
-        return zh_, attn
+        return zh_, attn, gmms
 
     def forward_b(self, x, zh, gmms, mask: Optional[T] = None) -> T:
         zh, _ = self.merge_zh(zh, gmms, mask)
@@ -434,9 +510,9 @@ class Spaghetti(models_utils.Model):
         z_init = self.dist.sample((num_items,))
         return z_init
 
-    def random_samples(self, num_items: int):
+    def random_samples(self, num_items: int, output_dir='', tf_sample_dirname=''):
         z_init = self.get_random_embeddings(num_items) # random z_a, one per sample. [B, dim_z]
-        zh, gmms = self.decomposition_control(z_init)  # [B, m, dim_h]
+        zh, gmms = self.decomposition_control(z_init, output_dir, tf_sample_dirname)  # [B, m, dim_h]
         return zh, gmms
 
     def __init__(self, opt: Options):

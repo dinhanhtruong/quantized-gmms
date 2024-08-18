@@ -1,6 +1,7 @@
 import os
 from custom_types import *
-from options import Options
+import options
+from options import Options, recon_sample_offset
 from utils import train_utils, mcubes_meshing, files_utils, mesh_utils
 from models.occ_gmm import Spaghetti
 from models import models_utils
@@ -92,7 +93,6 @@ class Inference:
         gmms = (means.view(1,1,-1,3), p.view(1,1,-1,3,3), mix_weights.view(1,1,-1), eigenvals.view(1,1,-1,3))
 
         gmm_sample_vals = get_gm_support(gmms, sample_points)[0][0] #ignore aux 2nd output, get 1st item w batch sz=1. shape [v,m]
-
         # get argmax gaussian for each vert sample
         gaussian_labels = torch.argmax(gmm_sample_vals, dim=1) #[v]
         print("gaussian labels: ", gaussian_labels)
@@ -161,7 +161,7 @@ class Inference:
         #     [150,150,150]
         # ]).cuda()
 
-        # part group colors
+        # # part group colors
         # gmm_colors = torch.tensor([
         #     [127,0,0],
         #     [144,240,144],
@@ -181,25 +181,25 @@ class Inference:
         #     [255,165,0]
         # ]).cuda()
         
-        # # high contrast colors
-        # gmm_colors = torch.tensor([
-        #     [47,80,80],
-        #     [127,0,0],
-        #     [25,25,112],
-        #     [0,100,0],
-        #     [255,0,0],
-        #     [255,165,0],
-        #     [255,255,0],
-        #     [0,255,0],
-        #     [0,255,255],
-        #     [0,0,255],
-        #     [255,0,255],
-        #     [30,144,255],
-        #     [220,160,220],
-        #     [144,240,144],
-        #     [255,20,150],
-        #     [255,220,185]
-        # ]).cuda()
+        # high contrast colors
+        gmm_colors = torch.tensor([
+            [47,80,80],
+            [127,0,0],
+            [25,25,112],
+            [0,100,0],
+            [255,0,0],
+            [255,165,0],
+            [255,255,0],
+            [0,255,0],
+            [0,255,255],
+            [0,0,255],
+            [255,0,255],
+            [30,144,255],
+            [220,160,220],
+            [144,240,144],
+            [255,20,150],
+            [255,220,185]
+        ]).cuda()
         
         return gmm_colors[gaussian_labels]
 
@@ -212,17 +212,22 @@ class Inference:
         
         for i, spaghetti_shape_idx in enumerate(fixed_items):
             spaghetti_shape_idx = spaghetti_shape_idx.item()
-            # if i == 6:
-            #     exit()
+            print("spag shape idx: ", spaghetti_shape_idx)
+            if i == 10:
+                exit()
             mesh = self.get_mesh(z[spaghetti_shape_idx], res)  # mcubes.  tuple of (V,F)
             # name = f'{fixed_items[i]:04d}' # OLD naming: use latent vec ID
-            name = self.raw_mesh_names[spaghetti_shape_idx] # use raw shapenet mesh name
-            if tf_sample_dirname:
-                name = f'sample_{i}' # overwrite name; ignore shapenet IDs
-            elif attn_weights is not None:
-                name += '_attn_colored'
-            elif from_quantized:
-                name += '_quantized'
+            if options.use_quantized:
+                if tf_sample_dirname:
+                    name = f'sample_{i+options.recon_sample_offset}' # overwrite name; ignore shapenet IDs
+                elif attn_weights is not None:
+                    name = self.raw_mesh_names[spaghetti_shape_idx] # use raw shapenet mesh name
+                    name += '_attn_colored'
+                elif from_quantized:
+                    name = self.raw_mesh_names[spaghetti_shape_idx] # use raw shapenet mesh name
+                    name += '_quantized'
+            else:
+                name = str(spaghetti_shape_idx+options.recon_sample_offset)
                 
             if mesh is not None:
                 # temp: color verts based on gaussian maximimizing likelihood
@@ -240,8 +245,8 @@ class Inference:
                 if gmms is not None:
                     pass
                     files_utils.export_gmm(gmms, spaghetti_shape_idx, f'{self.opt.cp_folder}/{folder_name}/gmms/{name}')
-            if verbose:
-                print(f'done {i + 1:d}/{len(z):d}')
+            # if verbose:
+            print(f'done {i + 1:d}/{len(z):d}')
 
     def load_file(self, info_path, disclude: Optional[List[int]] = None):
         info = files_utils.load_pickle(''.join(info_path))
@@ -370,22 +375,38 @@ class Inference:
 
     @models_utils.torch_no_grad
     ##########################################
-    def random_plot(self, folder_name: str, nums_sample, res=200, verbose=False):
+    def random_plot(self, folder_name: str, nums_sample, res=200, verbose=False, tf_sample_dirname=''):
         '''
         Saves randomly sampled mesh (and GMMs)
         '''
         print("rand shape")
-        zh_base, gmms = self.model.random_samples(nums_sample) # get surface vecs s_j and GMM params
+        zh_base, gmms = self.model.random_samples(nums_sample, folder_name, tf_sample_dirname) # get surface vecs s_j and GMM params
         centroids, factorized_cov, mixing_weights, eigenvals = gmms
 
         zh, attn_b = self.model.merge_zh(zh_base, gmms)  # z_c after applying mixing net 
-        numbers = self.get_new_ids(folder_name, nums_sample)
+        # numbers = self.get_new_ids(folder_name, nums_sample)
 
-        
+        sample_numbers = torch.arange(nums_sample)
 
 
-        self.plot_occ(zh, zh_base, gmms, numbers, folder_name, verbose=verbose, res=res)
+        self.plot_occ(zh, zh_base, gmms, sample_numbers, folder_name, verbose=verbose, res=res)
     ###########################################
+
+    def string_to_int_keys(self, tuples_id_to_part_group):
+        output = []
+        for tuple in tuples_id_to_part_group:
+            curr_dict = {int(k): v for k,v in tuple.items()}
+            output.append(curr_dict)
+        return output
+    
+    def get_canonical_part_group_order(self, tuples_id_to_part_group):
+        output = []
+        for tuple in tuples_id_to_part_group:
+            curr_dict = {}
+            for canonical_v, k  in enumerate(tuple.keys()):
+                curr_dict[k] = canonical_v
+            output.append(curr_dict)
+        return output
 
     @models_utils.torch_no_grad
     def plot(self, folder_name: str, nums_sample: int, verbose=False, res: int = 200, tf_sample_dirname='', attn_weights_path=''):
@@ -393,6 +414,7 @@ class Inference:
         Saves reconstructions of training meshes
         '''
         attn_weights = None
+        tuples_id_to_part_group= None
         if attn_weights_path:
             assert not tf_sample_dirname # want standard quantized reconstruction process
             shape_samples = os.path.basename(attn_weights_path)[:-3].split("_")[-1]
@@ -409,31 +431,64 @@ class Inference:
             print("using ALL train data")
             shape_samples = torch.arange(self.model.opt.dataset_size)
         else:
-            print('using rand train subset (if no TF samples specified)')
-            shape_samples = torch.randint(low=0, high=self.opt.dataset_size, size=(nums_sample,))
+            # print('using rand train subset (if no TF samples specified)')
+            # shape_samples = torch.randint(low=0, high=self.opt.dataset_size, size=(nums_sample,))
+            print('using ordered train subset (if no TF samples specified)')
+            shape_samples = torch.arange(nums_sample)
         if tf_sample_dirname:
             print("using TF samples from ", tf_sample_dirname)
+        
+            tuples_id_to_part_group = json.load(open(f"assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/{tf_sample_dirname}/tuples_id_to_part_group.json"))
+            tuples_id_to_part_group = self.string_to_int_keys(tuples_id_to_part_group)
+
+            tuples_id_to_part_group = self.get_canonical_part_group_order(tuples_id_to_part_group)
+
+            print(f"tuples_id_to_part_group: ")
+            for tuple in tuples_id_to_part_group:
+                print(f"\t{tuple}")
+            # tuples_id_to_part_group = [
+            #     {
+            #         9635: 0,
+            #         3372: 1,
+            #         3953: 2,
+            #         5942: 3,
+            #         4433: 4,
+            #     },
+            #     {
+            #         7792: 0,
+            #         1242: 1,
+            #         5125: 2,
+            #         2042: 3,
+            #         7976: 4,
+            #     }
+            # ]
+        
         zh_base, _, gmms = self.model.get_embeddings(shape_samples.to(self.device), folder_name, tf_sample_dirname) # NOTE: quantized code overrides internally
-        zh, attn_b = self.model.merge_zh(zh_base, gmms)
-        print("zh: ", zh.shape)
+        zh, attn_b, gmms = self.model.merge_zh(zh_base, gmms, tuples_id_to_part_group=tuples_id_to_part_group)  # z^c [B, m, dim=512]. index into gmms if necessary
+        print("zh: ", zh.shape) #== zb
 
         # save mesh names
         from_quantized = False
         if not attn_weights_path: 
             if not os.path.exists(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy'):
                 np.save(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy', shape_samples.detach().cpu().numpy())
-            else:
-                print('using existing mesh names')
-                from_quantized = True
-                shape_samples = np.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy')
-                #NOTE: TEMP
-                shape_samples = torch.arange(self.model.opt.dataset_size)
+            # else:
+            #     print('using existing mesh names')
+            #     from_quantized = True
+            #     shape_samples = np.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/mesh_ids.npy')
+
         
-        # TEMPP
-        # shape_samples = torch.tensor([int(x) for x in [0,1019,103,1030,1037,1042,1043,1051,106]])
+        # TEMPP: uncomment for reconstructing gt of specified eval tuples (via index into saved codebook_indices)
+        #shape_samples = torch.tensor([int(x) for x in [164]])
 
         # only reconstruct meshes for first n samples
         shape_samples = shape_samples[:nums_sample]
+
+        # temp: select shape indices
+        # shape_samples = torch.tensor([1900,10000], dtype=torch.int)
+
+        # TEMP: massive recon
+        # shape_samples = torch.arange(nums_sample)
         self.plot_occ(zh, zh_base, gmms, shape_samples, folder_name, verbose=True, res=res, from_quantized=from_quantized, tf_sample_dirname=tf_sample_dirname, attn_weights=attn_weights)
 
     def get_mesh_from_mid(self, gmm, included: T, res: int) -> Optional[T_Mesh]:

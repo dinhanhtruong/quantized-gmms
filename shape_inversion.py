@@ -235,10 +235,13 @@ def main():
                   '--mesh_path': {'default': './assets/mesh/example.obj', 'type': str},
                   '--source':  {'default': 'inversion', 'type': str, 'options': ('inversion', 'random', 'training')},
                   '--num_samples':  {'default': 10, 'type': int, 'help': 'relevant for random or training'},
+                  '--recon_sample_offset':  {'default': 0, 'type': int, 'help': 'relevant for mass reconstruction'},
                   '--tf_sample_dirname': {'default': '', 'type': str, 'help': 'if set, will use quantized codes from sampled TF sequences in <ckpt>/codes/<tf_sample_dirname>'},
                   '--attn_weights_path': {'default': '', 'type': str, 'help': 'if set, will reconstruct attention-colored shapes specified in this file"s name (e.g. attn_weights_t30_3bc8cebf08ac975dbd46d022fd7d80aa-3e7e119508f0abf935fc197bbabcd5bd-880715a3ef69f47e62b600da24e0965-983cb909846f4e1bbd46d022fd7d80aa )'}
                   }
     args = myparse.parse(for_parser)
+    options.recon_sample_offset = args['recon_sample_offset']
+    print("RECON OFFSET: ", options.recon_sample_offset)
     opt = options.Options(tag=args['model_name']) 
 
     if args['source'] == 'inversion':
@@ -247,7 +250,7 @@ def main():
     else:
         model = occ_inference.Inference(opt) # occ_gmm.Spaghetti model initialized in constructor 
         if args['source'] == 'random':
-            model.random_plot(args['output_name'], args['num_samples'])
+            model.random_plot(args['output_name'], args['num_samples'], tf_sample_dirname=args['tf_sample_dirname'])
         else:
             # from training samples
             model.plot(args['output_name'], args['num_samples'], res=200, tf_sample_dirname=args['tf_sample_dirname'], attn_weights_path=args['attn_weights_path']) #400 res def

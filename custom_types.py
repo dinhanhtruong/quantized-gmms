@@ -11,7 +11,8 @@ from enum import Enum, unique
 import torch.optim.optimizer
 import torch.utils.data
 
-if DEBUG:
+# if DEBUG:
+if True:
     seed = 99
     torch.manual_seed(seed)
     np.random.seed(seed)
