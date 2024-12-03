@@ -1,4 +1,5 @@
 import os
+import random
 from custom_types import *
 import options
 from options import Options, recon_sample_offset
@@ -83,7 +84,7 @@ class Inference:
         sample_points = sample_points.cuda()
         means, p, mix_weights, eigenvals = gmms
         num_parts = mix_weights.shape[0]
-        assert num_parts == 16
+        # assert num_parts == 16
         gmm_sample_vals = []
         print("v: ", sample_points.shape)
 
@@ -212,9 +213,9 @@ class Inference:
         
         for i, spaghetti_shape_idx in enumerate(fixed_items):
             spaghetti_shape_idx = spaghetti_shape_idx.item()
-            print("spag shape idx: ", spaghetti_shape_idx)
-            if i == 10:
-                exit()
+            print("(spag) shape idx: ", spaghetti_shape_idx)
+            # if i == 10:
+            #     exit()
             mesh = self.get_mesh(z[spaghetti_shape_idx], res)  # mcubes.  tuple of (V,F)
             # name = f'{fixed_items[i]:04d}' # OLD naming: use latent vec ID
             if options.use_quantized:
@@ -382,6 +383,9 @@ class Inference:
         print("rand shape")
         zh_base, gmms = self.model.random_samples(nums_sample, folder_name, tf_sample_dirname) # get surface vecs s_j and GMM params
         centroids, factorized_cov, mixing_weights, eigenvals = gmms
+        
+
+
 
         zh, attn_b = self.model.merge_zh(zh_base, gmms)  # z_c after applying mixing net 
         # numbers = self.get_new_ids(folder_name, nums_sample)
@@ -405,6 +409,18 @@ class Inference:
             curr_dict = {}
             for canonical_v, k  in enumerate(tuple.keys()):
                 curr_dict[k] = canonical_v
+            output.append(curr_dict)
+        return output
+    
+    def get_random_part_group_order(self, tuples_id_to_part_group):
+        output = []
+        for tuple in tuples_id_to_part_group:
+            rand_part_groups = list(range(5)) 
+            random.shuffle(rand_part_groups)
+            curr_dict = {}
+            for i, k  in enumerate(tuple.keys()):
+                # randomly remove from set
+                curr_dict[k] = rand_part_groups[i]
             output.append(curr_dict)
         return output
 
@@ -439,9 +455,13 @@ class Inference:
             print("using TF samples from ", tf_sample_dirname)
         
             tuples_id_to_part_group = json.load(open(f"assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/{tf_sample_dirname}/tuples_id_to_part_group.json"))
+            # tuples_id_to_part_group = json.load(open(f"assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/{tf_sample_dirname}/tuple_0_converted.json"))
+            # tuples_id_to_part_group = json.load(open(f"assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/{tf_sample_dirname}/random_symmetric_gaussian_selection.json"))
             tuples_id_to_part_group = self.string_to_int_keys(tuples_id_to_part_group)
 
-            tuples_id_to_part_group = self.get_canonical_part_group_order(tuples_id_to_part_group)
+            # UNCOMMENT FOR "GT" ORDERING (01234)
+            # tuples_id_to_part_group = self.get_canonical_part_group_order(tuples_id_to_part_group)
+            # tuples_id_to_part_group = self.get_random_part_group_order(tuples_id_to_part_group)
 
             print(f"tuples_id_to_part_group: ")
             for tuple in tuples_id_to_part_group:
@@ -462,10 +482,24 @@ class Inference:
             #         7976: 4,
             #     }
             # ]
-        
+                
         zh_base, _, gmms = self.model.get_embeddings(shape_samples.to(self.device), folder_name, tf_sample_dirname) # NOTE: quantized code overrides internally
+        # torch.save(gmms, f'assets/checkpoints/spaghetti_airplanes/{folder_name}/gmms.pt')
+        # torch.save(zh_base, f'assets/checkpoints/spaghetti_airplanes/{folder_name}/zh_base.pt')
+
+        if options.use_salad_data:
+            print("using SALAD-generated priming shapes")
+            tuple_indices = torch.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/salad_val_indices.pt')
+            tuple_index = tuple_indices[0]
+            salad_zh_base = torch.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/salad_intrinsic.pt') # [B, k=5, m=16, dim=512]
+            zh_base = salad_zh_base[tuple_index] # [k=5, m=16, dim=512]
+
+            salad_gmm = torch.load(f'assets/checkpoints/spaghetti_airplanes/{folder_name}/codes/salad_gmm.pt')
+            b, gp, g, _ = salad_gmm[0].shape
+            gmms = [item.view(b, gp * g, *item.shape[3:]) for item in salad_gmm]
+
         zh, attn_b, gmms = self.model.merge_zh(zh_base, gmms, tuples_id_to_part_group=tuples_id_to_part_group)  # z^c [B, m, dim=512]. index into gmms if necessary
-        print("zh: ", zh.shape) #== zb
+
 
         # save mesh names
         from_quantized = False
@@ -479,13 +513,20 @@ class Inference:
 
         
         # TEMPP: uncomment for reconstructing gt of specified eval tuples (via index into saved codebook_indices)
-        #shape_samples = torch.tensor([int(x) for x in [164]])
+        # shape_samples = torch.tensor([int(x) for x in [3, 4, 11, 13,15]])
 
         # only reconstruct meshes for first n samples
         shape_samples = shape_samples[:nums_sample]
 
-        # temp: select shape indices
-        # shape_samples = torch.tensor([1900,10000], dtype=torch.int)
+        # # temp: select shape indices for reconstruction from tuples (indices must match ordering of latents loaded)
+        tuple_to_reconstruct = [
+            "1137",
+            "15",
+            "248",
+            "35",
+            "2164"
+        ]
+        shape_samples = torch.tensor([int(x) for x in tuple_to_reconstruct], dtype=torch.int)
 
         # TEMP: massive recon
         # shape_samples = torch.arange(nums_sample)

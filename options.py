@@ -6,6 +6,7 @@ from custom_types import *
 
 recon_sample_offset = 0
 use_quantized = False  # set to true if want to save/load quantized codes
+use_salad_data = False
 
 class Options:
 

@@ -1,4 +1,5 @@
-import numpy as np   
+import numpy as np
+import torch   
 
 
 sample_dir_name='rand_unconditional'
@@ -35,3 +36,13 @@ np.save(f'assets/checkpoints/spaghetti_airplanes/{sample_dir_name}/codes_combine
 np.save(f'assets/checkpoints/spaghetti_airplanes/{sample_dir_name}/codes_combined/eigenvalues.npy', eigenvals)
 np.save(f'assets/checkpoints/spaghetti_airplanes/{sample_dir_name}/codes_combined/centers.npy', centers)
 np.save(f'assets/checkpoints/spaghetti_airplanes/{sample_dir_name}/codes_combined/mixing_weights.npy', mix_weights)
+
+
+
+zb_combined_old = torch.load(f'assets/checkpoints/spaghetti_airplanes/{sample_dir_name}/codes_combined/zb_combined_OLD_UNALIGNED.pt').detach().cpu().numpy()
+zb_combined = np.load(f'assets/checkpoints/spaghetti_airplanes/{sample_dir_name}/codes_combined/zb_combined.npy')
+
+print(zb_combined_old)
+print("=====================")
+print(zb_combined)
+print(np.equal(zb_combined_old, zb_combined))
