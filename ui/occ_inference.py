@@ -247,7 +247,7 @@ class Inference:
                     pass
                     files_utils.export_gmm(gmms, spaghetti_shape_idx, f'{self.opt.cp_folder}/{folder_name}/gmms/{name}')
             # if verbose:
-            print(f'done {i + 1:d}/{len(z):d}')
+            print(f'done {i + 1:d}/{len(fixed_items):d}')
 
     def load_file(self, info_path, disclude: Optional[List[int]] = None):
         info = files_utils.load_pickle(''.join(info_path))
@@ -519,14 +519,14 @@ class Inference:
         shape_samples = shape_samples[:nums_sample]
 
         # # temp: select shape indices for reconstruction from tuples (indices must match ordering of latents loaded)
-        tuple_to_reconstruct = [
-            "1137",
-            "15",
-            "248",
-            "35",
-            "2164"
-        ]
-        shape_samples = torch.tensor([int(x) for x in tuple_to_reconstruct], dtype=torch.int)
+        # tuple_to_reconstruct = [
+        #     "1137",
+        #     "15",
+        #     "248",
+        #     "35",
+        #     "2164"
+        # ]
+        # shape_samples = torch.tensor([int(x) for x in tuple_to_reconstruct], dtype=torch.int)
 
         # TEMP: massive recon
         # shape_samples = torch.arange(nums_sample)

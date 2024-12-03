@@ -339,13 +339,9 @@ class DecompositionControl(models_utils.Model):
         # print("new zb combined :", zb_combined.shape)
         # print(zb_combined)
         # exit()
-    
 
-        # else:
-        #     # load zs
-        #     print('loading existing codes')
-        #     zs = np.load(f'assets/checkpoints/spaghetti_airplanes/{output_dir}/codes/quantized_zb.npy')
-        #     zs = torch.tensor(zs).cuda()
+        # AT 12/2: for outlier detection, save constructed zb of sampled shapes
+
 
 
 
@@ -485,27 +481,27 @@ class Spaghetti(models_utils.Model):
         gmms_2 = []
         gmms_3 = []
 
-        part_groups = {
-            0: [0, 2, 3, 4, 8, 10, 11, 12], #body
-            1: [7, 15], # outer wing
-            2: [5, 13], # tail horiz stabilizer
-            3: [6, 14], # tail vert wing
-            4: [1, 9], #inner wing/engien
-        }
+        # part_groups = {
+        #     0: [0, 2, 3, 4, 8, 10, 11, 12], #body
+        #     1: [7, 15], # outer wing
+        #     2: [5, 13], # tail horiz stabilizer
+        #     3: [6, 14], # tail vert wing
+        #     4: [1, 9], #inner wing/engien
+        # }
         def sort_dict(dict):
             new_dict= {}
             for key, value in sorted(dict.items()): # Note the () after items!
                 new_dict[key] = value
             return new_dict
-        composed_shapes_zc = -torch.ones((len(tuples_id_to_part_group), zc.shape[1], zc.shape[2]))
-        for i, tuple in enumerate(tuples_id_to_part_group):
+        composed_shapes_zc = -torch.ones((len(tuples_id_to_gaussians), zc.shape[1], zc.shape[2]))
+        for i, tuple in enumerate(tuples_id_to_gaussians):
             curr_gmm0 = {} #stores gaussian id -> [dim,]
             curr_gmm1 = {} #stores gaussian id -> [dim,]
             curr_gmm2 = {} #stores gaussian id -> [dim,]
             curr_gmm3 = {} #stores gaussian id -> [dim,]
             for priming_shape_idx, part_group_to_borrow in tuple.items():
                 # for this priming shape, copy the chosen group's parts to the output
-                for gaussian_id in part_groups[part_group_to_borrow]:
+                for gaussian_id in part_group_to_borrow:
                     composed_shapes_zc[i, gaussian_id] = zc[priming_shape_idx, gaussian_id]
                     curr_gmm0[gaussian_id] = gmms[0][priming_shape_idx, 0, gaussian_id] #[dim,]
                     curr_gmm1[gaussian_id] = gmms[1][priming_shape_idx, 0, gaussian_id] #[dim,]
